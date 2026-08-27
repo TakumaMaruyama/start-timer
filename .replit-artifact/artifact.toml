@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Swim Start Timer"
+description = "An offline-first PWA for swim coaches to run precise start intervals on iPhone, iPad, and desktop. It supports a three-second first-start countdown, absolute-time beep scheduling, pause/resume, reset, wake lock, and large high-contrast controls."
+version = "1.0.0"
+id = "artifacts/swim-start-timer"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23382
+
+[services.development]
+run = "pnpm --filter @workspace/swim-start-timer run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/swim-start-timer", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/swim-start-timer/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23382"
+BASE_PATH = "/"

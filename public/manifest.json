@@ -1,0 +1,17 @@
+{
+  "name": "Swim Start Timer",
+  "short_name": "Swim Timer",
+  "description": "Offline-first swim start timer for coaches.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#08131e",
+  "theme_color": "#08131e",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
