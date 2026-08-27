@@ -11,16 +11,17 @@ export function useTimer(initialInterval = 10) {
   const [beepsPlayed, setBeepsPlayed] = useState(0);
   const [remainingMs, setRemainingMs] = useState(0);
   const [countdown, setCountdown] = useState(0);
+  const [startFlash, setStartFlash] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
 
   const stateRef = useRef(state);
   const intervalRef = useRef(intervalSec);
   const countdownStartRef = useRef(0);
   const lastSecRef = useRef(-1);
-  const firstStartAtRef = useRef(0);
   const nextStartAtRef = useRef(0);
   const beepsRef = useRef(0);
   const pausedRemainingRef = useRef(0);
+  const startFlashTimerRef = useRef<number | null>(null);
   const rafId = useRef<number | null>(null);
   const wakeLockRef = useRef<any>(null);
 
@@ -59,6 +60,17 @@ export function useTimer(initialInterval = 10) {
     setWakeLockActive(false);
   }, []);
 
+  const flashStart = useCallback(() => {
+    setStartFlash(true);
+    if (startFlashTimerRef.current !== null) {
+      window.clearTimeout(startFlashTimerRef.current);
+    }
+    startFlashTimerRef.current = window.setTimeout(() => {
+      setStartFlash(false);
+      startFlashTimerRef.current = null;
+    }, 700);
+  }, []);
+
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState !== 'visible') return;
@@ -95,7 +107,10 @@ export function useTimer(initialInterval = 10) {
 
     if (currentState === 'COUNTDOWN') {
       const elapsed = now - countdownStartRef.current;
+      const countdownRemaining = Math.max(0, 3000 - elapsed);
       const second = Math.floor(elapsed / 1000);
+
+      setRemainingMs(countdownRemaining);
 
       if (second === 0 && lastSecRef.current !== 0) {
         playPreviewTone();
@@ -111,14 +126,14 @@ export function useTimer(initialInterval = 10) {
         lastSecRef.current = 2;
       } else if (second >= 3) {
         playStartTone();
-        firstStartAtRef.current = countdownStartRef.current + 3000;
         nextStartAtRef.current =
-          firstStartAtRef.current + intervalRef.current * 1000;
+          countdownStartRef.current + 3000 + intervalRef.current * 1000;
         beepsRef.current = 1;
         setBeepsPlayed(1);
         setCountdown(0);
         setRemainingMs(intervalRef.current * 1000);
         setState('RUNNING');
+        flashStart();
         lastSecRef.current = -1;
       }
     } else if (currentState === 'RUNNING') {
@@ -138,18 +153,29 @@ export function useTimer(initialInterval = 10) {
         nextStartAtRef.current =
           target + (missedAfterTone + 1) * periodMs;
         setRemainingMs(Math.max(0, nextStartAtRef.current - now));
+        setCountdown(0);
+        flashStart();
       } else {
-        setRemainingMs(Math.max(0, remaining));
+        const safeRemaining = Math.max(0, remaining);
+        setRemainingMs(safeRemaining);
+        setCountdown(
+          safeRemaining > 0 && safeRemaining <= 3000
+            ? Math.ceil(safeRemaining / 1000)
+            : 0,
+        );
       }
     }
 
     rafId.current = requestAnimationFrame(loop);
-  }, []);
+  }, [flashStart]);
 
   useEffect(() => {
     rafId.current = requestAnimationFrame(loop);
     return () => {
       if (rafId.current !== null) cancelAnimationFrame(rafId.current);
+      if (startFlashTimerRef.current !== null) {
+        window.clearTimeout(startFlashTimerRef.current);
+      }
       void releaseWakeLock();
     };
   }, [loop, releaseWakeLock]);
@@ -159,7 +185,6 @@ export function useTimer(initialInterval = 10) {
     void requestWakeLock();
     countdownStartRef.current = performance.now();
     lastSecRef.current = -1;
-    firstStartAtRef.current = 0;
     nextStartAtRef.current = 0;
     beepsRef.current = 0;
     setBeepsPlayed(0);
@@ -192,7 +217,7 @@ export function useTimer(initialInterval = 10) {
     setRemainingMs(0);
     setBeepsPlayed(0);
     setCountdown(0);
-    firstStartAtRef.current = 0;
+    setStartFlash(false);
     nextStartAtRef.current = 0;
     beepsRef.current = 0;
     void releaseWakeLock();
@@ -211,6 +236,7 @@ export function useTimer(initialInterval = 10) {
     remainingMs,
     beepsPlayed,
     countdown,
+    startFlash,
     wakeLockActive,
     wakeLockSupported,
     start,

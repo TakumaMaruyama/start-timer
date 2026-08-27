@@ -1,4 +1,4 @@
-const CACHE_NAME = 'swim-timer-v1';
+const CACHE_NAME = 'swim-timer-v2';
 const APP_SHELL = ['/', '/index.html', '/manifest.json', '/favicon.svg'];
 
 self.addEventListener('install', (event) => {
