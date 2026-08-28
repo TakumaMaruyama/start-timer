@@ -106,7 +106,7 @@ export function schedulePreviewToneAt(atTime: number) {
 }
 
 export function scheduleStartToneAt(atTime: number) {
-  return scheduleToneAt(atTime, 1600, 'sine', 0.24);
+  return scheduleToneAt(atTime, 1600, 'sine', 1.0);
 }
 
 export async function initAudio() {
