@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { initAudio, playPreviewTone, playStartTone } from '@/lib/audio';
+import {
+  cancelScheduledTones,
+  ensureAudioRunning,
+  getAudioContext,
+  schedulePreviewToneAt,
+  scheduleStartToneAt,
+} from '@/lib/audio';
 
 export type TimerState = 'IDLE' | 'COUNTDOWN' | 'RUNNING' | 'PAUSED';
+
+const PREVIEW_STEPS = [
+  { offsetMs: 3000, frequency: 660 },
+  { offsetMs: 2000, frequency: 880 },
+  { offsetMs: 1000, frequency: 1100 },
+] as const;
 
 export function useTimer(initialInterval = 10) {
   const wakeLockSupported =
@@ -17,7 +29,6 @@ export function useTimer(initialInterval = 10) {
   const stateRef = useRef(state);
   const intervalRef = useRef(intervalSec);
   const countdownStartRef = useRef(0);
-  const lastSecRef = useRef(-1);
   const nextStartAtRef = useRef(0);
   const beepsRef = useRef(0);
   const pausedRemainingRef = useRef(0);
@@ -71,6 +82,125 @@ export function useTimer(initialInterval = 10) {
     }, 700);
   }, []);
 
+  const scheduleToneAtPerformanceTime = useCallback(
+    (
+      targetPerformanceMs: number,
+      schedule: (audioTime: number) => void,
+    ) => {
+      const context = getAudioContext();
+      if (!context || context.state !== 'running') return;
+
+      const nowPerformanceMs = performance.now();
+      if (targetPerformanceMs < nowPerformanceMs - 25) return;
+
+      const delaySeconds = Math.max(
+        0.02,
+        (targetPerformanceMs - nowPerformanceMs) / 1000,
+      );
+      schedule(context.currentTime + delaySeconds);
+    },
+    [],
+  );
+
+  const scheduleCycleAudio = useCallback(
+    (nextStartAtPerformanceMs: number) => {
+      PREVIEW_STEPS.forEach(({ offsetMs, frequency }) => {
+        scheduleToneAtPerformanceTime(
+          nextStartAtPerformanceMs - offsetMs,
+          (audioTime) => {
+            schedulePreviewToneAt(audioTime, frequency);
+          },
+        );
+      });
+      scheduleToneAtPerformanceTime(nextStartAtPerformanceMs, (audioTime) => {
+        scheduleStartToneAt(audioTime);
+      });
+    },
+    [scheduleToneAtPerformanceTime],
+  );
+
+  const scheduleInitialAudio = useCallback(
+    (countdownStartPerformanceMs: number) => {
+      PREVIEW_STEPS.forEach(({ offsetMs, frequency }) => {
+        scheduleToneAtPerformanceTime(
+          countdownStartPerformanceMs + (3000 - offsetMs),
+          (audioTime) => {
+            schedulePreviewToneAt(audioTime, frequency);
+          },
+        );
+      });
+      scheduleToneAtPerformanceTime(
+        countdownStartPerformanceMs + 3000,
+        (audioTime) => {
+          scheduleStartToneAt(audioTime);
+        },
+      );
+
+      scheduleCycleAudio(
+        countdownStartPerformanceMs + 3000 + intervalRef.current * 1000,
+      );
+    },
+    [scheduleCycleAudio, scheduleToneAtPerformanceTime],
+  );
+
+  const resyncAudioAfterVisibility = useCallback(async () => {
+    const currentState = stateRef.current;
+    if (currentState !== 'RUNNING' && currentState !== 'COUNTDOWN') return;
+
+    const context = getAudioContext();
+    if (!context || context.state === 'running') return;
+
+    cancelScheduledTones();
+    try {
+      await ensureAudioRunning();
+    } catch {
+      return;
+    }
+
+    const now = performance.now();
+
+    if (stateRef.current === 'COUNTDOWN') {
+      const firstStartAt = countdownStartRef.current + 3000;
+      if (now < firstStartAt) {
+        scheduleInitialAudio(countdownStartRef.current);
+        return;
+      }
+
+      // The initial start was missed while suspended. Start a fresh audible
+      // cycle now, then keep every following start exactly interval seconds
+      // apart from this audible anchor.
+      scheduleToneAtPerformanceTime(now, (audioTime) => {
+        scheduleStartToneAt(audioTime);
+      });
+      beepsRef.current = 1;
+      setBeepsPlayed(1);
+      setCountdown(0);
+      nextStartAtRef.current = now + intervalRef.current * 1000;
+      setRemainingMs(intervalRef.current * 1000);
+      setState('RUNNING');
+      flashStart();
+      scheduleCycleAudio(nextStartAtRef.current);
+      return;
+    }
+
+    const periodMs = intervalRef.current * 1000;
+    while (nextStartAtRef.current <= now) {
+      nextStartAtRef.current += periodMs;
+    }
+    setRemainingMs(nextStartAtRef.current - now);
+    setCountdown(
+      nextStartAtRef.current - now <= 3000
+        ? Math.ceil((nextStartAtRef.current - now) / 1000)
+        : 0,
+    );
+    scheduleCycleAudio(nextStartAtRef.current);
+  }, [
+    flashStart,
+    scheduleCycleAudio,
+    scheduleInitialAudio,
+    scheduleToneAtPerformanceTime,
+  ]);
+
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState !== 'visible') return;
@@ -80,26 +210,14 @@ export function useTimer(initialInterval = 10) {
         stateRef.current === 'COUNTDOWN'
       ) {
         void requestWakeLock();
-      }
-
-      if (stateRef.current === 'RUNNING') {
-        const now = performance.now();
-        const periodMs = intervalRef.current * 1000;
-
-        if (nextStartAtRef.current > 0 && now >= nextStartAtRef.current) {
-          const missed =
-            Math.floor((now - nextStartAtRef.current) / periodMs) + 1;
-          nextStartAtRef.current += missed * periodMs;
-        }
-
-        setRemainingMs(Math.max(0, nextStartAtRef.current - now));
+        void resyncAudioAfterVisibility();
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibility);
     return () =>
       document.removeEventListener('visibilitychange', handleVisibility);
-  }, [requestWakeLock]);
+  }, [requestWakeLock, resyncAudioAfterVisibility]);
 
   const loop = useCallback(() => {
     const now = performance.now();
@@ -108,24 +226,12 @@ export function useTimer(initialInterval = 10) {
     if (currentState === 'COUNTDOWN') {
       const elapsed = now - countdownStartRef.current;
       const countdownRemaining = Math.max(0, 3000 - elapsed);
-      const second = Math.floor(elapsed / 1000);
-
       setRemainingMs(countdownRemaining);
+      setCountdown(
+        countdownRemaining > 0 ? Math.ceil(countdownRemaining / 1000) : 0,
+      );
 
-      if (second === 0 && lastSecRef.current !== 0) {
-        playPreviewTone();
-        setCountdown(3);
-        lastSecRef.current = 0;
-      } else if (second === 1 && lastSecRef.current !== 1) {
-        playPreviewTone();
-        setCountdown(2);
-        lastSecRef.current = 1;
-      } else if (second === 2 && lastSecRef.current !== 2) {
-        playPreviewTone();
-        setCountdown(1);
-        lastSecRef.current = 2;
-      } else if (second >= 3) {
-        playStartTone();
+      if (elapsed >= 3000) {
         nextStartAtRef.current =
           countdownStartRef.current + 3000 + intervalRef.current * 1000;
         beepsRef.current = 1;
@@ -134,27 +240,30 @@ export function useTimer(initialInterval = 10) {
         setRemainingMs(intervalRef.current * 1000);
         setState('RUNNING');
         flashStart();
-        lastSecRef.current = -1;
       }
     } else if (currentState === 'RUNNING') {
       const target = nextStartAtRef.current;
       const remaining = target - now;
 
       if (target > 0 && remaining <= 0) {
-        playStartTone();
-        beepsRef.current += 1;
-        setBeepsPlayed(beepsRef.current);
+        if (getAudioContext()?.state !== 'running') {
+          void resyncAudioAfterVisibility();
+        } else {
+          beepsRef.current += 1;
+          setBeepsPlayed(beepsRef.current);
 
-        const periodMs = intervalRef.current * 1000;
-        const missedAfterTone = Math.max(
-          0,
-          Math.floor((now - target) / periodMs),
-        );
-        nextStartAtRef.current =
-          target + (missedAfterTone + 1) * periodMs;
-        setRemainingMs(Math.max(0, nextStartAtRef.current - now));
-        setCountdown(0);
-        flashStart();
+          const periodMs = intervalRef.current * 1000;
+          const missedAfterTone = Math.max(
+            0,
+            Math.floor((now - target) / periodMs),
+          );
+          nextStartAtRef.current =
+            target + (missedAfterTone + 1) * periodMs;
+          setRemainingMs(Math.max(0, nextStartAtRef.current - now));
+          setCountdown(0);
+          flashStart();
+          scheduleCycleAudio(nextStartAtRef.current);
+        }
       } else {
         const safeRemaining = Math.max(0, remaining);
         setRemainingMs(safeRemaining);
@@ -167,7 +276,11 @@ export function useTimer(initialInterval = 10) {
     }
 
     rafId.current = requestAnimationFrame(loop);
-  }, [flashStart]);
+  }, [
+    flashStart,
+    resyncAudioAfterVisibility,
+    scheduleCycleAudio,
+  ]);
 
   useEffect(() => {
     rafId.current = requestAnimationFrame(loop);
@@ -176,43 +289,66 @@ export function useTimer(initialInterval = 10) {
       if (startFlashTimerRef.current !== null) {
         window.clearTimeout(startFlashTimerRef.current);
       }
+      cancelScheduledTones();
       void releaseWakeLock();
     };
   }, [loop, releaseWakeLock]);
 
-  const start = useCallback(() => {
-    initAudio();
-    void requestWakeLock();
-    countdownStartRef.current = performance.now();
-    lastSecRef.current = -1;
+  const start = useCallback(async () => {
+    cancelScheduledTones();
+    try {
+      await ensureAudioRunning();
+    } catch {
+      return;
+    }
+
+    const countdownStart = performance.now();
+    countdownStartRef.current = countdownStart;
     nextStartAtRef.current = 0;
     beepsRef.current = 0;
     setBeepsPlayed(0);
     setRemainingMs(3000);
     setCountdown(3);
     setState('COUNTDOWN');
-  }, [requestWakeLock]);
+    void requestWakeLock();
+    scheduleInitialAudio(countdownStart);
+  }, [requestWakeLock, scheduleInitialAudio]);
 
   const pause = useCallback(() => {
     if (stateRef.current !== 'RUNNING') return;
     pausedRemainingRef.current =
       nextStartAtRef.current - performance.now();
+    cancelScheduledTones();
     setRemainingMs(Math.max(0, pausedRemainingRef.current));
+    setCountdown(
+      pausedRemainingRef.current > 0 &&
+        pausedRemainingRef.current <= 3000
+        ? Math.ceil(pausedRemainingRef.current / 1000)
+        : 0,
+    );
     setState('PAUSED');
     void releaseWakeLock();
   }, [releaseWakeLock]);
 
-  const resume = useCallback(() => {
+  const resume = useCallback(async () => {
     if (stateRef.current !== 'PAUSED') return;
-    initAudio();
-    void requestWakeLock();
-    nextStartAtRef.current =
+    try {
+      await ensureAudioRunning();
+    } catch {
+      return;
+    }
+
+    const resumedTarget =
       performance.now() + Math.max(0, pausedRemainingRef.current);
+    nextStartAtRef.current = resumedTarget;
     setRemainingMs(Math.max(0, pausedRemainingRef.current));
     setState('RUNNING');
-  }, [requestWakeLock]);
+    void requestWakeLock();
+    scheduleCycleAudio(resumedTarget);
+  }, [requestWakeLock, scheduleCycleAudio]);
 
   const reset = useCallback(() => {
+    cancelScheduledTones();
     setState('IDLE');
     setRemainingMs(0);
     setBeepsPlayed(0);

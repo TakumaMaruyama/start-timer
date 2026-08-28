@@ -1,36 +1,119 @@
 let audioCtx: AudioContext | null = null;
 
-export const initAudio = () => {
+export type ScheduledTone = {
+  cancel: () => void;
+};
+
+const scheduledTones = new Set<ScheduledTone>();
+
+function createAudioContext() {
+  const AudioContextClass =
+    window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+
+  if (!AudioContextClass) {
+    throw new Error('Web Audio API is not supported in this browser.');
+  }
+
+  return new AudioContextClass();
+}
+
+export async function ensureAudioRunning() {
   if (!audioCtx) {
-    audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    audioCtx = createAudioContext();
   }
-  if (audioCtx.state === 'suspended') {
-    audioCtx.resume();
+
+  if (audioCtx.state !== 'running') {
+    await audioCtx.resume();
   }
-};
 
-export const playTone = (freq: number, type: OscillatorType, duration: number) => {
-  if (!audioCtx) initAudio();
-  if (audioCtx!.state === 'suspended') audioCtx!.resume();
-  
-  const osc = audioCtx!.createOscillator();
-  const gain = audioCtx!.createGain();
-  
-  osc.type = type;
-  osc.frequency.setValueAtTime(freq, audioCtx!.currentTime);
-  
-  // Envelope to prevent audio clicks
-  gain.gain.setValueAtTime(0, audioCtx!.currentTime);
-  gain.gain.linearRampToValueAtTime(1, audioCtx!.currentTime + 0.02);
-  gain.gain.setValueAtTime(1, audioCtx!.currentTime + duration - 0.05);
-  gain.gain.linearRampToValueAtTime(0, audioCtx!.currentTime + duration);
-  
-  osc.connect(gain);
-  gain.connect(audioCtx!.destination);
-  
-  osc.start();
-  osc.stop(audioCtx!.currentTime + duration);
-};
+  if (audioCtx.state !== 'running') {
+    throw new Error('AudioContext did not enter the running state.');
+  }
 
-export const playPreviewTone = () => playTone(880, 'sine', 0.15);
-export const playStartTone = () => playTone(1400, 'square', 0.4);
+  return audioCtx;
+}
+
+export function getAudioContext() {
+  return audioCtx;
+}
+
+export function scheduleToneAt(
+  atTime: number,
+  frequency: number,
+  type: OscillatorType,
+  duration: number,
+): ScheduledTone | null {
+  if (!audioCtx || audioCtx.state !== 'running') return null;
+
+  const context = audioCtx;
+  const startAt = Math.max(atTime, context.currentTime + 0.02);
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  let cancelled = false;
+
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, startAt);
+
+  gain.gain.setValueAtTime(0, startAt);
+  gain.gain.linearRampToValueAtTime(1, startAt + 0.015);
+  gain.gain.setValueAtTime(1, startAt + Math.max(0.02, duration - 0.04));
+  gain.gain.linearRampToValueAtTime(0, startAt + duration);
+
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+
+  const scheduledTone: ScheduledTone = {
+    cancel: () => {
+      if (cancelled) return;
+      cancelled = true;
+      try {
+        oscillator.stop();
+      } catch {
+        // The oscillator may already have ended.
+      }
+      oscillator.disconnect();
+      gain.disconnect();
+      scheduledTones.delete(scheduledTone);
+    },
+  };
+
+  oscillator.addEventListener('ended', () => {
+    oscillator.disconnect();
+    gain.disconnect();
+    scheduledTones.delete(scheduledTone);
+  });
+
+  try {
+    oscillator.start(startAt);
+    oscillator.stop(startAt + duration);
+    scheduledTones.add(scheduledTone);
+  } catch {
+    scheduledTone.cancel();
+    return null;
+  }
+
+  return scheduledTone;
+}
+
+export function cancelScheduledTones() {
+  [...scheduledTones].forEach((tone) => tone.cancel());
+}
+
+export function schedulePreviewToneAt(atTime: number, frequency: number) {
+  return scheduleToneAt(atTime, frequency, 'sine', 0.2);
+}
+
+export function scheduleStartToneAt(atTime: number) {
+  return scheduleToneAt(atTime, 1400, 'square', 0.4);
+}
+
+export async function initAudio() {
+  return ensureAudioRunning();
+}
+
+export async function playStartTone() {
+  const context = await ensureAudioRunning();
+  return scheduleStartToneAt(context.currentTime + 0.02);
+}

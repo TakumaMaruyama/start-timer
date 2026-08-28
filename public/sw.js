@@ -1,4 +1,4 @@
-const CACHE_NAME = 'swim-timer-v2';
+const CACHE_NAME = 'swim-timer-v3';
 const APP_SHELL = ['/', '/index.html', '/manifest.json', '/favicon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -9,7 +9,17 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(clients.claim());
+  event.waitUntil(
+    caches.keys()
+      .then((names) =>
+        Promise.all(
+          names
+            .filter((name) => name.startsWith('swim-timer-') && name !== CACHE_NAME)
+            .map((name) => caches.delete(name)),
+        ),
+      )
+      .then(() => clients.claim()),
+  );
 });
 
 self.addEventListener('fetch', (event) => {
