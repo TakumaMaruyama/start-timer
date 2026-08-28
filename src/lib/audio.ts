@@ -101,12 +101,12 @@ export function cancelScheduledTones() {
   [...scheduledTones].forEach((tone) => tone.cancel());
 }
 
-export function schedulePreviewToneAt(atTime: number, frequency: number) {
-  return scheduleToneAt(atTime, frequency, 'sine', 0.2);
+export function schedulePreviewToneAt(atTime: number) {
+  return scheduleToneAt(atTime, 880, 'sine', 0.18);
 }
 
 export function scheduleStartToneAt(atTime: number) {
-  return scheduleToneAt(atTime, 1400, 'square', 0.4);
+  return scheduleToneAt(atTime, 1320, 'sine', 0.32);
 }
 
 export async function initAudio() {

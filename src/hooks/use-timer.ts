@@ -21,10 +21,11 @@ export type TimerState =
   | 'COMPLETE';
 
 const PREVIEW_STEPS = [
-  { offsetMs: 3000, frequency: 660 },
-  { offsetMs: 2000, frequency: 880 },
-  { offsetMs: 1000, frequency: 1100 },
+  { offsetMs: 3000 },
+  { offsetMs: 2000 },
+  { offsetMs: 1000 },
 ] as const;
+const UNLIMITED_SCHEDULE_BATCH_SIZE = 12;
 
 export function useTimer(initialInterval = 10) {
   const wakeLockSupported =
@@ -71,6 +72,7 @@ export function useTimer(initialInterval = 10) {
   const startPendingRef = useRef(false);
   const resumePendingRef = useRef(false);
   const resyncPendingRef = useRef(false);
+  const scheduledThroughRef = useRef(0);
   const startFlashTimerRef = useRef<number | null>(null);
   const rafId = useRef<number | null>(null);
   const wakeLockRef = useRef<any>(null);
@@ -144,6 +146,7 @@ export function useTimer(initialInterval = 10) {
     resumePendingRef.current = false;
     resyncPendingRef.current = false;
     cancelScheduledTones();
+    scheduledThroughRef.current = 0;
     if (startFlashTimerRef.current !== null) {
       window.clearTimeout(startFlashTimerRef.current);
       startFlashTimerRef.current = null;
@@ -189,11 +192,11 @@ export function useTimer(initialInterval = 10) {
         return;
       }
 
-      PREVIEW_STEPS.forEach(({ offsetMs, frequency }) => {
+      PREVIEW_STEPS.forEach(({ offsetMs }) => {
         scheduleToneAtPerformanceTime(
           nextStartAtPerformanceMs - offsetMs,
           (audioTime) => {
-            schedulePreviewToneAt(audioTime, frequency);
+            schedulePreviewToneAt(audioTime);
           },
         );
       });
@@ -204,13 +207,41 @@ export function useTimer(initialInterval = 10) {
     [scheduleToneAtPerformanceTime],
   );
 
+  const scheduleUpcomingAudio = useCallback(
+    (fromStartAtPerformanceMs: number) => {
+      const periodMs = intervalRef.current * 1000;
+      if (
+        scheduledThroughRef.current >
+        fromStartAtPerformanceMs + periodMs * 6
+      ) {
+        return;
+      }
+      const firstStartAt = Math.max(
+        fromStartAtPerformanceMs,
+        scheduledThroughRef.current,
+      );
+      const batchLimit = Math.min(
+        completionAtRef.current,
+        firstStartAt + periodMs * UNLIMITED_SCHEDULE_BATCH_SIZE,
+      );
+
+      let target = firstStartAt;
+      while (target < batchLimit) {
+        scheduleCycleAudio(target);
+        target += periodMs;
+      }
+      scheduledThroughRef.current = target;
+    },
+    [scheduleCycleAudio],
+  );
+
   const scheduleInitialAudio = useCallback(
     (countdownStartPerformanceMs: number) => {
-      PREVIEW_STEPS.forEach(({ offsetMs, frequency }) => {
+      PREVIEW_STEPS.forEach(({ offsetMs }) => {
         scheduleToneAtPerformanceTime(
           countdownStartPerformanceMs + (3000 - offsetMs),
           (audioTime) => {
-            schedulePreviewToneAt(audioTime, frequency);
+            schedulePreviewToneAt(audioTime);
           },
         );
       });
@@ -220,9 +251,9 @@ export function useTimer(initialInterval = 10) {
           scheduleStartToneAt(audioTime);
         },
       );
-      scheduleCycleAudio(nextStartAtRef.current);
+      scheduleUpcomingAudio(nextStartAtRef.current);
     },
-    [scheduleCycleAudio, scheduleToneAtPerformanceTime],
+    [scheduleToneAtPerformanceTime, scheduleUpcomingAudio],
   );
 
   const updateCurrentCycleNumber = useCallback(
@@ -272,6 +303,7 @@ export function useTimer(initialInterval = 10) {
     resyncPendingRef.current = true;
     const generation = commandGenerationRef.current;
     cancelScheduledTones();
+    scheduledThroughRef.current = 0;
     try {
       await ensureAudioRunning();
     } catch {
@@ -330,7 +362,7 @@ export function useTimer(initialInterval = 10) {
           completionAtRef.current,
         )
       ) {
-        scheduleCycleAudio(nextStartAtRef.current);
+        scheduleUpcomingAudio(nextStartAtRef.current);
       } else {
         enterCompletionWait(now);
       }
@@ -366,7 +398,7 @@ export function useTimer(initialInterval = 10) {
           ? Math.ceil((nextStartAtRef.current - now) / 1000)
           : 0,
       );
-      scheduleCycleAudio(nextStartAtRef.current);
+      scheduleUpcomingAudio(nextStartAtRef.current);
     } else {
       enterCompletionWait(now);
     }
@@ -465,7 +497,7 @@ export function useTimer(initialInterval = 10) {
               setWaitingForCompletion(false);
               setRemainingMs(Math.max(0, nextTarget - now));
               setCountdown(0);
-              scheduleCycleAudio(nextTarget);
+              scheduleUpcomingAudio(nextTarget);
             } else {
               enterCompletionWait(now);
             }
@@ -488,7 +520,7 @@ export function useTimer(initialInterval = 10) {
     finishPractice,
     flashStart,
     resyncAudioAfterVisibility,
-    scheduleCycleAudio,
+    scheduleUpcomingAudio,
     updateCurrentCycleNumber,
   ]);
 
@@ -504,6 +536,7 @@ export function useTimer(initialInterval = 10) {
         window.clearTimeout(startFlashTimerRef.current);
       }
       cancelScheduledTones();
+      scheduledThroughRef.current = 0;
       void releaseWakeLock();
     };
   }, [loop, releaseWakeLock]);
@@ -524,6 +557,7 @@ export function useTimer(initialInterval = 10) {
     const generation = commandGenerationRef.current + 1;
     commandGenerationRef.current = generation;
     cancelScheduledTones();
+    scheduledThroughRef.current = 0;
     try {
       await ensureAudioRunning();
     } catch {
@@ -586,6 +620,7 @@ export function useTimer(initialInterval = 10) {
     pausedCompletionRemainingRef.current =
       completionAtRef.current - now;
     cancelScheduledTones();
+    scheduledThroughRef.current = 0;
     setRemainingMs(Math.max(0, pausedRemainingRef.current));
     setCountdown(
       !waitingForCompletionRef.current &&
@@ -649,9 +684,9 @@ export function useTimer(initialInterval = 10) {
     void requestWakeLock();
 
     if (!pausedWaitingForCompletionRef.current) {
-      scheduleCycleAudio(nextStartAtRef.current);
+      scheduleUpcomingAudio(nextStartAtRef.current);
     }
-  }, [requestWakeLock, scheduleCycleAudio]);
+  }, [requestWakeLock, scheduleUpcomingAudio]);
 
   const reset = useCallback(() => {
     commandGenerationRef.current += 1;
@@ -659,6 +694,7 @@ export function useTimer(initialInterval = 10) {
     resumePendingRef.current = false;
     resyncPendingRef.current = false;
     cancelScheduledTones();
+    scheduledThroughRef.current = 0;
     if (startFlashTimerRef.current !== null) {
       window.clearTimeout(startFlashTimerRef.current);
       startFlashTimerRef.current = null;
