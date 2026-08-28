@@ -6,8 +6,19 @@ import {
   schedulePreviewToneAt,
   scheduleStartToneAt,
 } from '@/lib/audio';
+import {
+  cycleNumberAt,
+  isValidPracticeCycleSeconds,
+  isValidTotalStrokes,
+  shouldScheduleStartAt,
+} from '@/lib/progress';
 
-export type TimerState = 'IDLE' | 'COUNTDOWN' | 'RUNNING' | 'PAUSED';
+export type TimerState =
+  | 'IDLE'
+  | 'COUNTDOWN'
+  | 'RUNNING'
+  | 'PAUSED'
+  | 'COMPLETE';
 
 const PREVIEW_STEPS = [
   { offsetMs: 3000, frequency: 660 },
@@ -19,19 +30,47 @@ export function useTimer(initialInterval = 10) {
   const wakeLockSupported =
     typeof navigator !== 'undefined' && 'wakeLock' in navigator;
   const [intervalSec, setIntervalSec] = useState(initialInterval);
+  const [cycleMinutes, setCycleMinutes] = useState<number | null>(null);
+  const [cycleSeconds, setCycleSeconds] = useState<number | null>(null);
+  const [totalStrokes, setTotalStrokes] = useState<number | null>(null);
   const [state, setState] = useState<TimerState>('IDLE');
-  const [beepsPlayed, setBeepsPlayed] = useState(0);
   const [remainingMs, setRemainingMs] = useState(0);
   const [countdown, setCountdown] = useState(0);
+  const [currentCycleNumber, setCurrentCycleNumber] = useState(0);
+  const [waitingForCompletion, setWaitingForCompletion] = useState(false);
   const [startFlash, setStartFlash] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
 
+  const cycleConfigured = cycleMinutes !== null || cycleSeconds !== null;
+  const practiceCycleSeconds = cycleConfigured
+    ? (cycleMinutes ?? 0) * 60 + (cycleSeconds ?? 0)
+    : null;
+  const canStart =
+    totalStrokes === null ||
+    isValidPracticeCycleSeconds(practiceCycleSeconds);
+
   const stateRef = useRef(state);
   const intervalRef = useRef(intervalSec);
+  const practiceCycleSecondsRef = useRef<number | null>(
+    practiceCycleSeconds,
+  );
+  const totalStrokesRef = useRef<number | null>(totalStrokes);
   const countdownStartRef = useRef(0);
+  const firstStartAtRef = useRef(0);
   const nextStartAtRef = useRef(0);
-  const beepsRef = useRef(0);
+  const completionAtRef = useRef(Number.POSITIVE_INFINITY);
+  const currentCycleNumberRef = useRef(0);
+  const waitingForCompletionRef = useRef(false);
   const pausedRemainingRef = useRef(0);
+  const pausedCompletionRemainingRef = useRef(
+    Number.POSITIVE_INFINITY,
+  );
+  const pausedAtRef = useRef(0);
+  const pausedWaitingForCompletionRef = useRef(false);
+  const commandGenerationRef = useRef(0);
+  const startPendingRef = useRef(false);
+  const resumePendingRef = useRef(false);
+  const resyncPendingRef = useRef(false);
   const startFlashTimerRef = useRef<number | null>(null);
   const rafId = useRef<number | null>(null);
   const wakeLockRef = useRef<any>(null);
@@ -44,10 +83,27 @@ export function useTimer(initialInterval = 10) {
     intervalRef.current = intervalSec;
   }, [intervalSec]);
 
+  useEffect(() => {
+    practiceCycleSecondsRef.current = practiceCycleSeconds;
+  }, [practiceCycleSeconds]);
+
+  useEffect(() => {
+    totalStrokesRef.current = totalStrokes;
+  }, [totalStrokes]);
+
   const requestWakeLock = useCallback(async () => {
+    const generation = commandGenerationRef.current;
     try {
       if ('wakeLock' in navigator && !wakeLockRef.current) {
         const wakeLock = await (navigator as any).wakeLock.request('screen');
+        if (
+          generation !== commandGenerationRef.current ||
+          stateRef.current === 'IDLE' ||
+          stateRef.current === 'COMPLETE'
+        ) {
+          await wakeLock.release();
+          return;
+        }
         wakeLockRef.current = wakeLock;
         setWakeLockActive(true);
         wakeLock.addEventListener('release', () => {
@@ -82,6 +138,26 @@ export function useTimer(initialInterval = 10) {
     }, 700);
   }, []);
 
+  const finishPractice = useCallback(() => {
+    commandGenerationRef.current += 1;
+    startPendingRef.current = false;
+    resumePendingRef.current = false;
+    resyncPendingRef.current = false;
+    cancelScheduledTones();
+    if (startFlashTimerRef.current !== null) {
+      window.clearTimeout(startFlashTimerRef.current);
+      startFlashTimerRef.current = null;
+    }
+    setStartFlash(false);
+    setCountdown(0);
+    setRemainingMs(0);
+    setWaitingForCompletion(false);
+    waitingForCompletionRef.current = false;
+    stateRef.current = 'COMPLETE';
+    setState('COMPLETE');
+    void releaseWakeLock();
+  }, [releaseWakeLock]);
+
   const scheduleToneAtPerformanceTime = useCallback(
     (
       targetPerformanceMs: number,
@@ -104,6 +180,15 @@ export function useTimer(initialInterval = 10) {
 
   const scheduleCycleAudio = useCallback(
     (nextStartAtPerformanceMs: number) => {
+      if (
+        !shouldScheduleStartAt(
+          nextStartAtPerformanceMs,
+          completionAtRef.current,
+        )
+      ) {
+        return;
+      }
+
       PREVIEW_STEPS.forEach(({ offsetMs, frequency }) => {
         scheduleToneAtPerformanceTime(
           nextStartAtPerformanceMs - offsetMs,
@@ -135,51 +220,132 @@ export function useTimer(initialInterval = 10) {
           scheduleStartToneAt(audioTime);
         },
       );
-
-      scheduleCycleAudio(
-        countdownStartPerformanceMs + 3000 + intervalRef.current * 1000,
-      );
+      scheduleCycleAudio(nextStartAtRef.current);
     },
     [scheduleCycleAudio, scheduleToneAtPerformanceTime],
   );
 
+  const updateCurrentCycleNumber = useCallback(
+    (nowPerformanceMs: number) => {
+      const cycleDurationSeconds = practiceCycleSecondsRef.current;
+      const total = totalStrokesRef.current;
+      if (
+        total === null ||
+        cycleDurationSeconds === null ||
+        !isValidPracticeCycleSeconds(cycleDurationSeconds)
+      ) {
+        return;
+      }
+
+      const currentCycle = Math.min(
+        total,
+        cycleNumberAt(
+          nowPerformanceMs,
+          firstStartAtRef.current,
+          cycleDurationSeconds * 1000,
+        ),
+      );
+      if (currentCycleNumberRef.current !== currentCycle) {
+        currentCycleNumberRef.current = currentCycle;
+        setCurrentCycleNumber(currentCycle);
+      }
+    },
+    [],
+  );
+
+  const enterCompletionWait = useCallback((now: number) => {
+    nextStartAtRef.current = completionAtRef.current;
+    waitingForCompletionRef.current = true;
+    setWaitingForCompletion(true);
+    setRemainingMs(Math.max(0, completionAtRef.current - now));
+    setCountdown(0);
+  }, []);
+
   const resyncAudioAfterVisibility = useCallback(async () => {
     const currentState = stateRef.current;
     if (currentState !== 'RUNNING' && currentState !== 'COUNTDOWN') return;
+    if (resyncPendingRef.current) return;
 
     const context = getAudioContext();
     if (!context || context.state === 'running') return;
 
+    resyncPendingRef.current = true;
+    const generation = commandGenerationRef.current;
     cancelScheduledTones();
     try {
       await ensureAudioRunning();
     } catch {
+      if (generation === commandGenerationRef.current) {
+        resyncPendingRef.current = false;
+      }
       return;
     }
+
+    if (
+      generation !== commandGenerationRef.current ||
+      (stateRef.current !== 'RUNNING' &&
+        stateRef.current !== 'COUNTDOWN')
+    ) {
+      if (generation === commandGenerationRef.current) {
+        resyncPendingRef.current = false;
+      }
+      return;
+    }
+    resyncPendingRef.current = false;
 
     const now = performance.now();
 
     if (stateRef.current === 'COUNTDOWN') {
-      const firstStartAt = countdownStartRef.current + 3000;
-      if (now < firstStartAt) {
+      const expectedFirstStartAt = countdownStartRef.current + 3000;
+      if (now < expectedFirstStartAt) {
         scheduleInitialAudio(countdownStartRef.current);
         return;
       }
 
-      // The initial start was missed while suspended. Start a fresh audible
-      // cycle now, then keep every following start exactly interval seconds
-      // apart from this audible anchor.
+      firstStartAtRef.current = now;
+      const cycleDurationSeconds = practiceCycleSecondsRef.current;
+      const total = totalStrokesRef.current;
+      completionAtRef.current =
+        total !== null &&
+        cycleDurationSeconds !== null &&
+        isValidPracticeCycleSeconds(cycleDurationSeconds)
+          ? now + total * cycleDurationSeconds * 1000
+          : Number.POSITIVE_INFINITY;
+
       scheduleToneAtPerformanceTime(now, (audioTime) => {
         scheduleStartToneAt(audioTime);
       });
-      beepsRef.current = 1;
-      setBeepsPlayed(1);
-      setCountdown(0);
+      currentCycleNumberRef.current = 1;
+      setCurrentCycleNumber(1);
       nextStartAtRef.current = now + intervalRef.current * 1000;
       setRemainingMs(intervalRef.current * 1000);
+      setCountdown(0);
+      stateRef.current = 'RUNNING';
       setState('RUNNING');
       flashStart();
-      scheduleCycleAudio(nextStartAtRef.current);
+
+      if (
+        shouldScheduleStartAt(
+          nextStartAtRef.current,
+          completionAtRef.current,
+        )
+      ) {
+        scheduleCycleAudio(nextStartAtRef.current);
+      } else {
+        enterCompletionWait(now);
+      }
+      return;
+    }
+
+    if (now >= completionAtRef.current) {
+      finishPractice();
+      return;
+    }
+
+    updateCurrentCycleNumber(now);
+
+    if (waitingForCompletionRef.current) {
+      setRemainingMs(completionAtRef.current - now);
       return;
     }
 
@@ -187,18 +353,31 @@ export function useTimer(initialInterval = 10) {
     while (nextStartAtRef.current <= now) {
       nextStartAtRef.current += periodMs;
     }
-    setRemainingMs(nextStartAtRef.current - now);
-    setCountdown(
-      nextStartAtRef.current - now <= 3000
-        ? Math.ceil((nextStartAtRef.current - now) / 1000)
-        : 0,
-    );
-    scheduleCycleAudio(nextStartAtRef.current);
+
+    if (
+      shouldScheduleStartAt(
+        nextStartAtRef.current,
+        completionAtRef.current,
+      )
+    ) {
+      setRemainingMs(nextStartAtRef.current - now);
+      setCountdown(
+        nextStartAtRef.current - now <= 3000
+          ? Math.ceil((nextStartAtRef.current - now) / 1000)
+          : 0,
+      );
+      scheduleCycleAudio(nextStartAtRef.current);
+    } else {
+      enterCompletionWait(now);
+    }
   }, [
+    enterCompletionWait,
+    finishPractice,
     flashStart,
     scheduleCycleAudio,
     scheduleInitialAudio,
     scheduleToneAtPerformanceTime,
+    updateCurrentCycleNumber,
   ]);
 
   useEffect(() => {
@@ -223,6 +402,11 @@ export function useTimer(initialInterval = 10) {
     const now = performance.now();
     const currentState = stateRef.current;
 
+    if (currentState === 'COMPLETE') {
+      rafId.current = requestAnimationFrame(loop);
+      return;
+    }
+
     if (currentState === 'COUNTDOWN') {
       const elapsed = now - countdownStartRef.current;
       const countdownRemaining = Math.max(0, 3000 - elapsed);
@@ -232,59 +416,89 @@ export function useTimer(initialInterval = 10) {
       );
 
       if (elapsed >= 3000) {
-        nextStartAtRef.current =
-          countdownStartRef.current + 3000 + intervalRef.current * 1000;
-        beepsRef.current = 1;
-        setBeepsPlayed(1);
+        currentCycleNumberRef.current = 1;
+        setCurrentCycleNumber(1);
         setCountdown(0);
-        setRemainingMs(intervalRef.current * 1000);
+        setRemainingMs(Math.max(0, nextStartAtRef.current - now));
+        stateRef.current = 'RUNNING';
         setState('RUNNING');
         flashStart();
       }
     } else if (currentState === 'RUNNING') {
-      const target = nextStartAtRef.current;
-      const remaining = target - now;
-
-      if (target > 0 && remaining <= 0) {
-        if (getAudioContext()?.state !== 'running') {
-          void resyncAudioAfterVisibility();
-        } else {
-          beepsRef.current += 1;
-          setBeepsPlayed(beepsRef.current);
-
-          const periodMs = intervalRef.current * 1000;
-          const missedAfterTone = Math.max(
-            0,
-            Math.floor((now - target) / periodMs),
-          );
-          nextStartAtRef.current =
-            target + (missedAfterTone + 1) * periodMs;
-          setRemainingMs(Math.max(0, nextStartAtRef.current - now));
-          setCountdown(0);
-          flashStart();
-          scheduleCycleAudio(nextStartAtRef.current);
-        }
+      if (now >= completionAtRef.current) {
+        finishPractice();
       } else {
-        const safeRemaining = Math.max(0, remaining);
-        setRemainingMs(safeRemaining);
-        setCountdown(
-          safeRemaining > 0 && safeRemaining <= 3000
-            ? Math.ceil(safeRemaining / 1000)
-            : 0,
-        );
+        updateCurrentCycleNumber(now);
+      }
+
+      if (
+        stateRef.current === 'RUNNING' &&
+        waitingForCompletionRef.current
+      ) {
+        setRemainingMs(completionAtRef.current - now);
+        setCountdown(0);
+      } else if (stateRef.current === 'RUNNING') {
+        const target = nextStartAtRef.current;
+        const remaining = target - now;
+
+        if (target > 0 && remaining <= 0) {
+          if (getAudioContext()?.state !== 'running') {
+            void resyncAudioAfterVisibility();
+          } else {
+            const periodMs = intervalRef.current * 1000;
+            const missedAfterTone = Math.max(
+              0,
+              Math.floor((now - target) / periodMs),
+            );
+            const nextTarget =
+              target + (missedAfterTone + 1) * periodMs;
+            flashStart();
+
+            if (
+              shouldScheduleStartAt(
+                nextTarget,
+                completionAtRef.current,
+              )
+            ) {
+              nextStartAtRef.current = nextTarget;
+              waitingForCompletionRef.current = false;
+              setWaitingForCompletion(false);
+              setRemainingMs(Math.max(0, nextTarget - now));
+              setCountdown(0);
+              scheduleCycleAudio(nextTarget);
+            } else {
+              enterCompletionWait(now);
+            }
+          }
+        } else {
+          const safeRemaining = Math.max(0, remaining);
+          setRemainingMs(safeRemaining);
+          setCountdown(
+            safeRemaining > 0 && safeRemaining <= 3000
+              ? Math.ceil(safeRemaining / 1000)
+              : 0,
+          );
+        }
       }
     }
 
     rafId.current = requestAnimationFrame(loop);
   }, [
+    enterCompletionWait,
+    finishPractice,
     flashStart,
     resyncAudioAfterVisibility,
     scheduleCycleAudio,
+    updateCurrentCycleNumber,
   ]);
 
   useEffect(() => {
     rafId.current = requestAnimationFrame(loop);
     return () => {
+      commandGenerationRef.current += 1;
+      startPendingRef.current = false;
+      resumePendingRef.current = false;
+      resyncPendingRef.current = false;
       if (rafId.current !== null) cancelAnimationFrame(rafId.current);
       if (startFlashTimerRef.current !== null) {
         window.clearTimeout(startFlashTimerRef.current);
@@ -295,20 +509,63 @@ export function useTimer(initialInterval = 10) {
   }, [loop, releaseWakeLock]);
 
   const start = useCallback(async () => {
+    if (
+      stateRef.current !== 'IDLE' ||
+      startPendingRef.current ||
+      (totalStrokesRef.current !== null &&
+        !isValidPracticeCycleSeconds(
+          practiceCycleSecondsRef.current,
+        ))
+    ) {
+      return;
+    }
+
+    startPendingRef.current = true;
+    const generation = commandGenerationRef.current + 1;
+    commandGenerationRef.current = generation;
     cancelScheduledTones();
     try {
       await ensureAudioRunning();
     } catch {
+      if (generation === commandGenerationRef.current) {
+        startPendingRef.current = false;
+      }
       return;
     }
 
+    if (
+      generation !== commandGenerationRef.current ||
+      stateRef.current !== 'IDLE'
+    ) {
+      if (generation === commandGenerationRef.current) {
+        startPendingRef.current = false;
+      }
+      return;
+    }
+    startPendingRef.current = false;
+
     const countdownStart = performance.now();
+    const firstStartAt = countdownStart + 3000;
+    const cycleDurationSeconds = practiceCycleSecondsRef.current;
+    const total = totalStrokesRef.current;
+
     countdownStartRef.current = countdownStart;
-    nextStartAtRef.current = 0;
-    beepsRef.current = 0;
-    setBeepsPlayed(0);
+    firstStartAtRef.current = firstStartAt;
+    nextStartAtRef.current =
+      firstStartAt + intervalRef.current * 1000;
+    completionAtRef.current =
+      total !== null &&
+      cycleDurationSeconds !== null &&
+      isValidPracticeCycleSeconds(cycleDurationSeconds)
+        ? firstStartAt + total * cycleDurationSeconds * 1000
+        : Number.POSITIVE_INFINITY;
+    currentCycleNumberRef.current = 0;
+    waitingForCompletionRef.current = false;
+    setCurrentCycleNumber(0);
+    setWaitingForCompletion(false);
     setRemainingMs(3000);
     setCountdown(3);
+    stateRef.current = 'COUNTDOWN';
     setState('COUNTDOWN');
     void requestWakeLock();
     scheduleInitialAudio(countdownStart);
@@ -316,62 +573,163 @@ export function useTimer(initialInterval = 10) {
 
   const pause = useCallback(() => {
     if (stateRef.current !== 'RUNNING') return;
+    commandGenerationRef.current += 1;
+    resyncPendingRef.current = false;
+    const now = performance.now();
+    pausedAtRef.current = now;
+    pausedWaitingForCompletionRef.current =
+      waitingForCompletionRef.current;
     pausedRemainingRef.current =
-      nextStartAtRef.current - performance.now();
+      (waitingForCompletionRef.current
+        ? completionAtRef.current
+        : nextStartAtRef.current) - now;
+    pausedCompletionRemainingRef.current =
+      completionAtRef.current - now;
     cancelScheduledTones();
     setRemainingMs(Math.max(0, pausedRemainingRef.current));
     setCountdown(
-      pausedRemainingRef.current > 0 &&
+      !waitingForCompletionRef.current &&
+        pausedRemainingRef.current > 0 &&
         pausedRemainingRef.current <= 3000
         ? Math.ceil(pausedRemainingRef.current / 1000)
         : 0,
     );
+    stateRef.current = 'PAUSED';
     setState('PAUSED');
     void releaseWakeLock();
   }, [releaseWakeLock]);
 
   const resume = useCallback(async () => {
-    if (stateRef.current !== 'PAUSED') return;
+    if (stateRef.current !== 'PAUSED' || resumePendingRef.current) return;
+    resumePendingRef.current = true;
+    const generation = commandGenerationRef.current + 1;
+    commandGenerationRef.current = generation;
     try {
       await ensureAudioRunning();
     } catch {
+      if (generation === commandGenerationRef.current) {
+        resumePendingRef.current = false;
+      }
       return;
     }
 
-    const resumedTarget =
-      performance.now() + Math.max(0, pausedRemainingRef.current);
-    nextStartAtRef.current = resumedTarget;
+    if (
+      generation !== commandGenerationRef.current ||
+      stateRef.current !== 'PAUSED'
+    ) {
+      if (generation === commandGenerationRef.current) {
+        resumePendingRef.current = false;
+      }
+      return;
+    }
+    resumePendingRef.current = false;
+
+    const now = performance.now();
+    firstStartAtRef.current += Math.max(0, now - pausedAtRef.current);
+    completionAtRef.current = Number.isFinite(
+      pausedCompletionRemainingRef.current,
+    )
+      ? now + Math.max(0, pausedCompletionRemainingRef.current)
+      : Number.POSITIVE_INFINITY;
+    waitingForCompletionRef.current =
+      pausedWaitingForCompletionRef.current;
+    setWaitingForCompletion(pausedWaitingForCompletionRef.current);
+    nextStartAtRef.current =
+      now + Math.max(0, pausedRemainingRef.current);
     setRemainingMs(Math.max(0, pausedRemainingRef.current));
+    setCountdown(
+      !pausedWaitingForCompletionRef.current &&
+        pausedRemainingRef.current > 0 &&
+        pausedRemainingRef.current <= 3000
+        ? Math.ceil(pausedRemainingRef.current / 1000)
+        : 0,
+    );
+    stateRef.current = 'RUNNING';
     setState('RUNNING');
     void requestWakeLock();
-    scheduleCycleAudio(resumedTarget);
+
+    if (!pausedWaitingForCompletionRef.current) {
+      scheduleCycleAudio(nextStartAtRef.current);
+    }
   }, [requestWakeLock, scheduleCycleAudio]);
 
   const reset = useCallback(() => {
+    commandGenerationRef.current += 1;
+    startPendingRef.current = false;
+    resumePendingRef.current = false;
+    resyncPendingRef.current = false;
     cancelScheduledTones();
+    if (startFlashTimerRef.current !== null) {
+      window.clearTimeout(startFlashTimerRef.current);
+      startFlashTimerRef.current = null;
+    }
+    stateRef.current = 'IDLE';
     setState('IDLE');
     setRemainingMs(0);
-    setBeepsPlayed(0);
     setCountdown(0);
+    setCurrentCycleNumber(0);
+    setWaitingForCompletion(false);
     setStartFlash(false);
+    currentCycleNumberRef.current = 0;
+    waitingForCompletionRef.current = false;
     nextStartAtRef.current = 0;
-    beepsRef.current = 0;
+    completionAtRef.current = Number.POSITIVE_INFINITY;
+    pausedRemainingRef.current = 0;
+    pausedCompletionRemainingRef.current =
+      Number.POSITIVE_INFINITY;
+    pausedAtRef.current = 0;
+    pausedWaitingForCompletionRef.current = false;
     void releaseWakeLock();
   }, [releaseWakeLock]);
 
   const changeInterval = useCallback((value: number) => {
     if (Number.isInteger(value) && value >= 5 && value <= 120) {
+      intervalRef.current = value;
       setIntervalSec(value);
+    }
+  }, []);
+
+  const changeCycleMinutes = useCallback((value: number | null) => {
+    if (
+      value === null ||
+      (Number.isInteger(value) && value >= 0 && value <= 99)
+    ) {
+      setCycleMinutes(value);
+    }
+  }, []);
+
+  const changeCycleSeconds = useCallback((value: number | null) => {
+    if (
+      value === null ||
+      (Number.isInteger(value) && value >= 0 && value <= 59)
+    ) {
+      setCycleSeconds(value);
+    }
+  }, []);
+
+  const changeTotalStrokes = useCallback((value: number | null) => {
+    if (isValidTotalStrokes(value)) {
+      totalStrokesRef.current = value;
+      setTotalStrokes(value);
     }
   }, []);
 
   return {
     intervalSec,
     changeInterval,
+    cycleMinutes,
+    cycleSeconds,
+    practiceCycleSeconds,
+    changeCycleMinutes,
+    changeCycleSeconds,
+    totalStrokes,
+    changeTotalStrokes,
+    canStart,
     state,
     remainingMs,
-    beepsPlayed,
     countdown,
+    currentCycleNumber,
+    waitingForCompletion,
     startFlash,
     wakeLockActive,
     wakeLockSupported,
