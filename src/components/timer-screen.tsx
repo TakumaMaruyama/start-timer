@@ -11,11 +11,9 @@ import {
   Play,
   Plus,
   Square,
-  Volume2,
   Zap,
 } from 'lucide-react';
 import { useTimer } from '@/hooks/use-timer';
-import { playStartTone } from '@/lib/audio';
 
 function formatRemaining(remainingMs: number) {
   const totalSeconds = Math.ceil(Math.max(0, remainingMs) / 1000);
@@ -207,10 +205,6 @@ export function TimerScreen() {
     changeTotalStrokes(totalStrokes === null ? 1 : totalStrokes + 1);
   };
 
-  const handleTestSound = () => {
-    void playStartTone().catch(() => undefined);
-  };
-
   const presets = [5, 10, 15, 20, 30];
   const cycleLabel = formatCycleLabel(practiceCycleSeconds);
   const cycleRequired = totalStrokes !== null && !canStart;
@@ -224,18 +218,6 @@ export function TimerScreen() {
           SWIM START TIMER
         </div>
         <div className="flex gap-2 sm:gap-4 items-center">
-          <button
-            onClick={handleTestSound}
-            className="flex items-center gap-1 sm:gap-2 text-muted-foreground hover:text-white transition-colors active:scale-95 whitespace-nowrap"
-            title="音を確認"
-            data-testid="button-test-sound"
-          >
-            <Volume2 className="w-5 h-5" />
-            <span className="text-[10px] sm:text-sm font-bold tracking-wider">
-              音を確認
-            </span>
-          </button>
-
           <div
             className={`flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded font-bold transition-colors ${
               wakeLockActive
