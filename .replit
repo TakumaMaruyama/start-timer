@@ -1,0 +1,3 @@
+[deployment]
+router = "application"
+deploymentTarget = "autoscale"
