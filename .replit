@@ -1,3 +1,5 @@
+modules = ["nodejs-24"]
+
 [deployment]
 router = "application"
 deploymentTarget = "autoscale"
