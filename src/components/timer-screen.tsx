@@ -608,10 +608,23 @@ export function TimerScreen() {
                       {practiceCycleCountdownLabel}
                     </div>
                     <div className="mt-0.5 flex items-baseline justify-center gap-1 leading-none">
-                      <span className="text-[clamp(2.75rem,8vh,5.5rem)] font-black tabular-nums tracking-tighter">
-                        {practiceCycleRemainingSeconds}
-                      </span>
-                      <span className="text-sm sm:text-xl font-black">秒</span>
+                      {startFlash ? (
+                        <span
+                          className="whitespace-nowrap text-[clamp(1rem,3vh,2.25rem)] font-black tracking-tight text-primary animate-pulse-fast"
+                          aria-live="assertive"
+                        >
+                          スタート！
+                        </span>
+                      ) : (
+                        <>
+                          <span className="text-[clamp(2.75rem,8vh,5.5rem)] font-black tabular-nums tracking-tighter">
+                            {practiceCycleRemainingSeconds}
+                          </span>
+                          <span className="text-sm sm:text-xl font-black">
+                            秒
+                          </span>
+                        </>
+                      )}
                     </div>
                     {state === 'PAUSED' && (
                       <div className="mt-1 text-[10px] sm:text-xs font-bold tracking-widest">
@@ -622,12 +635,12 @@ export function TimerScreen() {
                 </div>
 
                 {!waitingForCompletion && (
-                  <div className="flex items-baseline justify-center gap-2 rounded-full border border-border bg-card/70 px-3 py-1 text-muted-foreground">
-                    <span className="text-[10px] min-[380px]:text-xs sm:text-sm font-bold tracking-wide">
+                  <div className="flex flex-col items-center justify-center gap-0.5 rounded-2xl border-2 border-border bg-card/80 px-5 py-2 text-muted-foreground shadow-lg min-[480px]:flex-row min-[480px]:gap-4 min-[480px]:rounded-full min-[480px]:px-6">
+                    <span className="text-sm min-[380px]:text-base sm:text-xl font-bold tracking-wide whitespace-nowrap">
                       次のスタート音まで
                     </span>
                     <span
-                      className={`text-2xl sm:text-4xl font-black leading-none tabular-nums tracking-tighter ${
+                      className={`text-4xl sm:text-5xl font-black leading-none tabular-nums tracking-tighter ${
                         state === 'PAUSED'
                           ? 'text-muted-foreground'
                           : countdown > 0
@@ -652,40 +665,17 @@ export function TimerScreen() {
                   className={`text-[3.75rem] min-[380px]:text-[5rem] sm:text-[8rem] md:text-[12rem] font-black leading-none tabular-nums tracking-tighter transition-colors duration-200 drop-shadow-xl ${
                     state === 'PAUSED'
                       ? 'text-muted-foreground'
-                      : countdown > 0
+                      : startFlash
+                        ? 'text-primary'
+                        : countdown > 0
                         ? 'text-destructive'
                         : 'text-primary'
                   }`}
-                  aria-live="polite"
+                  aria-live={startFlash ? 'assertive' : 'polite'}
                 >
-                  {formatRemaining(remainingMs)}
+                  {startFlash ? 'スタート！' : formatRemaining(remainingMs)}
                 </div>
               </>
-            )}
-
-            {(countdown > 0 || startFlash) && (
-              <div
-                className={`pointer-events-none absolute z-10 flex justify-center px-2 text-center ${
-                  hasConfiguredPracticeCycle
-                    ? 'right-3 top-2 sm:right-6 sm:top-4'
-                    : 'inset-0 items-center'
-                }`}
-                aria-live="assertive"
-              >
-                <span
-                  className={`font-black leading-none drop-shadow-[0_0_30px_rgba(255,165,0,0.6)] animate-pulse-fast ${
-                    hasConfiguredPracticeCycle
-                      ? startFlash
-                        ? 'text-[2.25rem] min-[380px]:text-4xl sm:text-5xl text-primary'
-                        : 'text-[4rem] min-[380px]:text-6xl sm:text-7xl text-accent'
-                      : startFlash
-                        ? 'text-[3.5rem] min-[380px]:text-[5rem] sm:text-[8rem] md:text-[12rem] text-primary'
-                        : 'text-[8rem] min-[380px]:text-[10rem] sm:text-[14rem] md:text-[20rem] text-accent'
-                  }`}
-                >
-                  {startFlash ? 'スタート！' : countdown}
-                </span>
-              </div>
             )}
           </div>
         )}
