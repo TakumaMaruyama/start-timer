@@ -11,13 +11,16 @@ import {
   Play,
   Plus,
   Square,
-  Zap,
 } from 'lucide-react';
 import { useTimer } from '@/hooks/use-timer';
 import {
   adjustPracticeCycleSeconds,
   MAX_PRACTICE_CYCLE_SECONDS,
 } from '@/lib/practice-cycle';
+import {
+  adjustTotalStrokes,
+  MAX_TOTAL_STROKES,
+} from '@/lib/progress';
 
 function formatRemaining(remainingMs: number) {
   const totalSeconds = Math.ceil(Math.max(0, remainingMs) / 1000);
@@ -26,20 +29,6 @@ function formatRemaining(remainingMs: number) {
     .padStart(2, '0');
   const seconds = (totalSeconds % 60).toString().padStart(2, '0');
   return `${minutes}:${seconds}`;
-}
-
-function formatCycleLabel(totalSeconds: number | null) {
-  if (totalSeconds === null || totalSeconds <= 0) return null;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-
-  if (minutes > 0 && seconds === 0) {
-    return `${minutes}分サイクル`;
-  }
-  if (minutes > 0) {
-    return `${minutes}分${seconds}秒サイクル`;
-  }
-  return `${seconds}秒サイクル`;
 }
 
 export function TimerScreen() {
@@ -60,8 +49,6 @@ export function TimerScreen() {
     currentCycleNumber,
     waitingForCompletion,
     startFlash,
-    wakeLockActive,
-    wakeLockSupported,
     start,
     pause,
     resume,
@@ -200,13 +187,8 @@ export function TimerScreen() {
     }
   };
 
-  const decreaseTotal = () => {
-    if (totalStrokes === null) return;
-    changeTotalStrokes(totalStrokes === 1 ? null : totalStrokes - 1);
-  };
-
-  const increaseTotal = () => {
-    changeTotalStrokes(totalStrokes === null ? 1 : totalStrokes + 1);
+  const adjustTotal = (delta: number) => {
+    changeTotalStrokes(adjustTotalStrokes(totalStrokes, delta));
   };
 
   const adjustCycle = (deltaSeconds: number) => {
@@ -224,48 +206,21 @@ export function TimerScreen() {
   };
 
   const presets = [5, 10, 15, 20, 30];
-  const cycleLabel = formatCycleLabel(practiceCycleSeconds);
   const cycleRequired = totalStrokes !== null && !canStart;
   const isTimerActive =
     state === 'COUNTDOWN' || state === 'RUNNING' || state === 'PAUSED';
 
   return (
-    <div className="min-h-[100dvh] w-full flex flex-col bg-background text-foreground overflow-hidden pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
-      <header className="flex justify-between items-center gap-2 p-4 border-b border-border/50">
+    <div className="h-[100dvh] w-full flex flex-col bg-background text-foreground overflow-hidden pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
+      <header className="shrink-0 p-4 border-b border-border/50">
         <div className="font-bold tracking-widest text-primary text-xs sm:text-base">
           SWIM START TIMER
         </div>
-        <div className="flex gap-2 sm:gap-4 items-center">
-          <div
-            className={`flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded font-bold transition-colors ${
-              wakeLockActive
-                ? 'bg-accent/20 text-accent'
-                : 'bg-muted text-muted-foreground'
-            }`}
-            title={
-              !wakeLockSupported
-                ? '画面維持は利用できません'
-                : wakeLockActive
-                  ? '画面維持は有効です'
-                  : '画面維持は待機中です'
-            }
-          >
-            <Zap className={`w-4 h-4 ${wakeLockActive ? 'animate-pulse' : ''}`} />
-            <span className="text-[9px] sm:text-xs whitespace-nowrap">
-              画面維持：
-              {!wakeLockSupported
-                ? '利用不可'
-                : wakeLockActive
-                  ? '有効'
-                  : '待機'}
-            </span>
-          </div>
-        </div>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 relative z-10 min-h-0 overflow-y-auto">
+      <main className="flex-1 flex flex-col items-center justify-start p-3 sm:p-4 relative z-10 min-h-0 overflow-y-auto overscroll-y-contain">
         {state === 'IDLE' && (
-          <div className="flex flex-col items-center w-full max-w-lg gap-3 sm:gap-5 py-2 animate-in fade-in zoom-in duration-300">
+          <div className="my-auto flex flex-col items-center w-full max-w-lg gap-3 sm:gap-5 py-2 animate-in fade-in zoom-in duration-300">
             <section className="text-center space-y-1">
               <h2 className="text-base sm:text-xl font-bold tracking-[0.15em] text-muted-foreground">
                 スタート音の間隔
@@ -452,16 +407,18 @@ export function TimerScreen() {
                     ))}
                   </div>
                 </form>
-                <p
-                  className={`mt-2 text-xs sm:text-sm font-bold normal-case ${
-                    cycleRequired ? 'text-destructive' : 'text-accent'
-                  }`}
-                  data-testid="text-cycle-summary"
-                >
-                  {cycleRequired
-                    ? '合計本数を入力する場合は必須です'
-                    : cycleLabel ?? '合計本数を使う場合に設定'}
-                </p>
+                {(cycleRequired || practiceCycleSeconds === null) && (
+                  <p
+                    className={`mt-2 text-xs sm:text-sm font-bold normal-case ${
+                      cycleRequired ? 'text-destructive' : 'text-accent'
+                    }`}
+                    data-testid="text-cycle-summary"
+                  >
+                    {cycleRequired
+                      ? '合計本数を入力する場合は必須です'
+                      : '合計本数を使う場合に設定'}
+                  </p>
+                )}
               </section>
 
               <section className="rounded-2xl border border-border bg-card/70 p-3 text-center">
@@ -474,18 +431,8 @@ export function TimerScreen() {
 
                 <form
                   onSubmit={commitTotal}
-                  className="mt-2 flex items-center justify-center gap-2"
+                  className="mt-2 flex flex-col items-center gap-2"
                 >
-                  <button
-                    type="button"
-                    onClick={decreaseTotal}
-                    disabled={totalStrokes === null}
-                    aria-label="合計本数を1本減らす"
-                    className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center text-accent active:scale-90 transition-all disabled:opacity-35 disabled:pointer-events-none"
-                    data-testid="button-dec-total"
-                  >
-                    <Minus className="w-5 h-5" />
-                  </button>
                   <div className="flex items-end">
                     <input
                       type="number"
@@ -506,16 +453,47 @@ export function TimerScreen() {
                       本
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={increaseTotal}
-                    disabled={totalStrokes === 99}
-                    aria-label="合計本数を1本増やす"
-                    className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center text-accent active:scale-90 transition-all disabled:opacity-35 disabled:pointer-events-none"
-                    data-testid="button-inc-total"
-                  >
-                    <Plus className="w-5 h-5" />
-                  </button>
+                  <div className="grid grid-cols-4 gap-1 w-full max-w-[220px]">
+                    {[
+                      {
+                        delta: -5,
+                        label: '5本減らす',
+                        testId: 'button-dec-total-5',
+                      },
+                      {
+                        delta: -1,
+                        label: '1本減らす',
+                        testId: 'button-dec-total',
+                      },
+                      {
+                        delta: 1,
+                        label: '1本増やす',
+                        testId: 'button-inc-total',
+                      },
+                      {
+                        delta: 5,
+                        label: '5本増やす',
+                        testId: 'button-inc-total-5',
+                      },
+                    ].map(({ delta, label, testId }) => (
+                      <button
+                        key={delta}
+                        type="button"
+                        onClick={() => adjustTotal(delta)}
+                        disabled={
+                          delta < 0
+                            ? totalStrokes === null || totalStrokes < -delta
+                            : (totalStrokes ?? 0) >
+                              MAX_TOTAL_STROKES - delta
+                        }
+                        aria-label={`合計本数を${label}`}
+                        className="h-10 rounded-lg bg-secondary px-1 text-xs font-bold text-accent active:scale-95 transition-all disabled:opacity-35 disabled:pointer-events-none"
+                        data-testid={testId}
+                      >
+                        {delta > 0 ? `＋${delta}本` : `−${-delta}本`}
+                      </button>
+                    ))}
+                  </div>
                 </form>
 
                 <p className="mt-2 text-[11px] sm:text-xs font-bold text-muted-foreground normal-case">
@@ -578,7 +556,7 @@ export function TimerScreen() {
 
         {state === 'COMPLETE' && totalStrokes !== null && (
           <div
-            className="flex flex-col items-center justify-center text-center animate-in fade-in zoom-in duration-300"
+            className="my-auto flex flex-col items-center justify-center text-center animate-in fade-in zoom-in duration-300"
             aria-live="assertive"
             data-testid="practice-complete"
           >
@@ -595,7 +573,7 @@ export function TimerScreen() {
         )}
       </main>
 
-      <footer className="p-4 sm:p-6 pb-6 sm:pb-12 bg-background/80 backdrop-blur-md border-t border-border/50 relative z-20">
+      <footer className="shrink-0 p-4 sm:p-6 pb-6 sm:pb-12 bg-background/80 backdrop-blur-md border-t border-border/50 relative z-20">
         <div className="max-w-2xl mx-auto flex justify-center gap-3 sm:gap-8">
           {state === 'IDLE' && (
             <button
