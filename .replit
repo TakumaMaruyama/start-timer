@@ -1,5 +1,6 @@
 modules = ["nodejs-24"]
 
 [deployment]
+run = ["pnpm", "run", "serve"]
 router = "application"
 deploymentTarget = "autoscale"
