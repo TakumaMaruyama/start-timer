@@ -37,6 +37,58 @@ export function cycleNumberAt(
   );
 }
 
+export type PracticeCycleStatus = {
+  currentCycleNumber: number;
+  nextCycleNumber: number | null;
+  remainingMs: number;
+};
+
+/**
+ * Return progress within the configured practice cycle using absolute times.
+ * The final cycle counts down to practice completion instead of another start.
+ */
+export function practiceCycleStatusAt(
+  nowPerformanceMs: number,
+  firstStartAtPerformanceMs: number,
+  cycleDurationMs: number,
+  totalCycles: number,
+): PracticeCycleStatus | null {
+  if (
+    !Number.isFinite(nowPerformanceMs) ||
+    !Number.isFinite(firstStartAtPerformanceMs) ||
+    !Number.isFinite(cycleDurationMs) ||
+    cycleDurationMs <= 0 ||
+    !Number.isInteger(totalCycles) ||
+    totalCycles < 1
+  ) {
+    return null;
+  }
+
+  const effectiveNow = Math.max(
+    nowPerformanceMs,
+    firstStartAtPerformanceMs,
+  );
+  const currentCycleNumber = Math.min(
+    totalCycles,
+    cycleNumberAt(
+      effectiveNow,
+      firstStartAtPerformanceMs,
+      cycleDurationMs,
+    ),
+  );
+  const nextBoundaryAt =
+    firstStartAtPerformanceMs + currentCycleNumber * cycleDurationMs;
+
+  return {
+    currentCycleNumber,
+    nextCycleNumber:
+      currentCycleNumber < totalCycles
+        ? currentCycleNumber + 1
+        : null,
+    remainingMs: Math.max(0, nextBoundaryAt - effectiveNow),
+  };
+}
+
 export function shouldScheduleStartAt(
   startAtPerformanceMs: number,
   completionAtPerformanceMs: number,

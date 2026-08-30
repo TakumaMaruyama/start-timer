@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   adjustTotalStrokes,
   MAX_TOTAL_STROKES,
+  practiceCycleStatusAt,
 } from './progress.ts';
 
 test('adjusts a configured total by one or five', () => {
@@ -28,4 +29,43 @@ test('keeps out-of-range adjustments unchanged', () => {
     adjustTotalStrokes(MAX_TOTAL_STROKES - 4, 5),
     MAX_TOTAL_STROKES - 4,
   );
+});
+
+test('reports the next practice-cycle start from absolute times', () => {
+  assert.deepEqual(practiceCycleStatusAt(1_000, 1_000, 60_000, 4), {
+    currentCycleNumber: 1,
+    nextCycleNumber: 2,
+    remainingMs: 60_000,
+  });
+  assert.deepEqual(practiceCycleStatusAt(31_000, 1_000, 60_000, 4), {
+    currentCycleNumber: 1,
+    nextCycleNumber: 2,
+    remainingMs: 30_000,
+  });
+});
+
+test('advances without accumulating delayed-frame drift', () => {
+  assert.deepEqual(practiceCycleStatusAt(126_000, 1_000, 60_000, 4), {
+    currentCycleNumber: 3,
+    nextCycleNumber: 4,
+    remainingMs: 55_000,
+  });
+});
+
+test('counts the final cycle down to practice completion', () => {
+  assert.deepEqual(practiceCycleStatusAt(121_000, 1_000, 60_000, 3), {
+    currentCycleNumber: 3,
+    nextCycleNumber: null,
+    remainingMs: 60_000,
+  });
+  assert.deepEqual(practiceCycleStatusAt(181_000, 1_000, 60_000, 3), {
+    currentCycleNumber: 3,
+    nextCycleNumber: null,
+    remainingMs: 0,
+  });
+});
+
+test('rejects invalid practice-cycle progress inputs', () => {
+  assert.equal(practiceCycleStatusAt(1_000, 1_000, 0, 3), null);
+  assert.equal(practiceCycleStatusAt(1_000, 1_000, 60_000, 0), null);
 });

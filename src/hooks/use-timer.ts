@@ -7,9 +7,9 @@ import {
   scheduleStartToneAt,
 } from '@/lib/audio';
 import {
-  cycleNumberAt,
   isValidPracticeCycleSeconds,
   isValidTotalStrokes,
+  practiceCycleStatusAt,
   shouldScheduleStartAt,
 } from '@/lib/progress';
 
@@ -38,6 +38,9 @@ export function useTimer(initialInterval = 10) {
   const [remainingMs, setRemainingMs] = useState(0);
   const [countdown, setCountdown] = useState(0);
   const [currentCycleNumber, setCurrentCycleNumber] = useState(0);
+  const [practiceCycleRemainingMs, setPracticeCycleRemainingMs] = useState<
+    number | null
+  >(null);
   const [waitingForCompletion, setWaitingForCompletion] = useState(false);
   const [startFlash, setStartFlash] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
@@ -154,6 +157,7 @@ export function useTimer(initialInterval = 10) {
     setStartFlash(false);
     setCountdown(0);
     setRemainingMs(0);
+    setPracticeCycleRemainingMs(null);
     setWaitingForCompletion(false);
     waitingForCompletionRef.current = false;
     stateRef.current = 'COMPLETE';
@@ -256,7 +260,7 @@ export function useTimer(initialInterval = 10) {
     [scheduleToneAtPerformanceTime, scheduleUpcomingAudio],
   );
 
-  const updateCurrentCycleNumber = useCallback(
+  const updatePracticeCycleProgress = useCallback(
     (nowPerformanceMs: number) => {
       const cycleDurationSeconds = practiceCycleSecondsRef.current;
       const total = totalStrokesRef.current;
@@ -265,21 +269,29 @@ export function useTimer(initialInterval = 10) {
         cycleDurationSeconds === null ||
         !isValidPracticeCycleSeconds(cycleDurationSeconds)
       ) {
-        return;
+        setPracticeCycleRemainingMs(null);
+        return null;
       }
 
-      const currentCycle = Math.min(
+      const status = practiceCycleStatusAt(
+        nowPerformanceMs,
+        firstStartAtRef.current,
+        cycleDurationSeconds * 1000,
         total,
-        cycleNumberAt(
-          nowPerformanceMs,
-          firstStartAtRef.current,
-          cycleDurationSeconds * 1000,
-        ),
       );
-      if (currentCycleNumberRef.current !== currentCycle) {
-        currentCycleNumberRef.current = currentCycle;
-        setCurrentCycleNumber(currentCycle);
+      if (status === null) {
+        setPracticeCycleRemainingMs(null);
+        return null;
       }
+
+      if (
+        currentCycleNumberRef.current !== status.currentCycleNumber
+      ) {
+        currentCycleNumberRef.current = status.currentCycleNumber;
+        setCurrentCycleNumber(status.currentCycleNumber);
+      }
+      setPracticeCycleRemainingMs(status.remainingMs);
+      return status;
     },
     [],
   );
@@ -349,6 +361,7 @@ export function useTimer(initialInterval = 10) {
       });
       currentCycleNumberRef.current = 1;
       setCurrentCycleNumber(1);
+      updatePracticeCycleProgress(now);
       nextStartAtRef.current = now + intervalRef.current * 1000;
       setRemainingMs(intervalRef.current * 1000);
       setCountdown(0);
@@ -374,7 +387,7 @@ export function useTimer(initialInterval = 10) {
       return;
     }
 
-    updateCurrentCycleNumber(now);
+    updatePracticeCycleProgress(now);
 
     if (waitingForCompletionRef.current) {
       setRemainingMs(completionAtRef.current - now);
@@ -409,7 +422,7 @@ export function useTimer(initialInterval = 10) {
     scheduleCycleAudio,
     scheduleInitialAudio,
     scheduleToneAtPerformanceTime,
-    updateCurrentCycleNumber,
+    updatePracticeCycleProgress,
   ]);
 
   useEffect(() => {
@@ -450,6 +463,7 @@ export function useTimer(initialInterval = 10) {
       if (elapsed >= 3000) {
         currentCycleNumberRef.current = 1;
         setCurrentCycleNumber(1);
+        updatePracticeCycleProgress(now);
         setCountdown(0);
         setRemainingMs(Math.max(0, nextStartAtRef.current - now));
         stateRef.current = 'RUNNING';
@@ -460,7 +474,7 @@ export function useTimer(initialInterval = 10) {
       if (now >= completionAtRef.current) {
         finishPractice();
       } else {
-        updateCurrentCycleNumber(now);
+        updatePracticeCycleProgress(now);
       }
 
       if (
@@ -521,7 +535,7 @@ export function useTimer(initialInterval = 10) {
     flashStart,
     resyncAudioAfterVisibility,
     scheduleUpcomingAudio,
-    updateCurrentCycleNumber,
+    updatePracticeCycleProgress,
   ]);
 
   useEffect(() => {
@@ -596,6 +610,7 @@ export function useTimer(initialInterval = 10) {
     currentCycleNumberRef.current = 0;
     waitingForCompletionRef.current = false;
     setCurrentCycleNumber(0);
+    setPracticeCycleRemainingMs(null);
     setWaitingForCompletion(false);
     setRemainingMs(3000);
     setCountdown(3);
@@ -610,6 +625,7 @@ export function useTimer(initialInterval = 10) {
     commandGenerationRef.current += 1;
     resyncPendingRef.current = false;
     const now = performance.now();
+    updatePracticeCycleProgress(now);
     pausedAtRef.current = now;
     pausedWaitingForCompletionRef.current =
       waitingForCompletionRef.current;
@@ -632,7 +648,7 @@ export function useTimer(initialInterval = 10) {
     stateRef.current = 'PAUSED';
     setState('PAUSED');
     void releaseWakeLock();
-  }, [releaseWakeLock]);
+  }, [releaseWakeLock, updatePracticeCycleProgress]);
 
   const resume = useCallback(async () => {
     if (stateRef.current !== 'PAUSED' || resumePendingRef.current) return;
@@ -671,6 +687,7 @@ export function useTimer(initialInterval = 10) {
     setWaitingForCompletion(pausedWaitingForCompletionRef.current);
     nextStartAtRef.current =
       now + Math.max(0, pausedRemainingRef.current);
+    updatePracticeCycleProgress(now);
     setRemainingMs(Math.max(0, pausedRemainingRef.current));
     setCountdown(
       !pausedWaitingForCompletionRef.current &&
@@ -686,7 +703,11 @@ export function useTimer(initialInterval = 10) {
     if (!pausedWaitingForCompletionRef.current) {
       scheduleUpcomingAudio(nextStartAtRef.current);
     }
-  }, [requestWakeLock, scheduleUpcomingAudio]);
+  }, [
+    requestWakeLock,
+    scheduleUpcomingAudio,
+    updatePracticeCycleProgress,
+  ]);
 
   const reset = useCallback(() => {
     commandGenerationRef.current += 1;
@@ -704,6 +725,7 @@ export function useTimer(initialInterval = 10) {
     setRemainingMs(0);
     setCountdown(0);
     setCurrentCycleNumber(0);
+    setPracticeCycleRemainingMs(null);
     setWaitingForCompletion(false);
     setStartFlash(false);
     currentCycleNumberRef.current = 0;
@@ -765,6 +787,7 @@ export function useTimer(initialInterval = 10) {
     remainingMs,
     countdown,
     currentCycleNumber,
+    practiceCycleRemainingMs,
     waitingForCompletion,
     startFlash,
     wakeLockActive,

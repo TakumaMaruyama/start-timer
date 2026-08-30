@@ -31,6 +31,9 @@ function formatRemaining(remainingMs: number) {
   return `${minutes}:${seconds}`;
 }
 
+const CYCLE_RING_RADIUS = 52;
+const CYCLE_RING_CIRCUMFERENCE = 2 * Math.PI * CYCLE_RING_RADIUS;
+
 export function TimerScreen() {
   const {
     intervalSec,
@@ -47,6 +50,7 @@ export function TimerScreen() {
     remainingMs,
     countdown,
     currentCycleNumber,
+    practiceCycleRemainingMs,
     waitingForCompletion,
     startFlash,
     start,
@@ -209,6 +213,43 @@ export function TimerScreen() {
   const cycleRequired = totalStrokes !== null && !canStart;
   const isTimerActive =
     state === 'COUNTDOWN' || state === 'RUNNING' || state === 'PAUSED';
+  const practiceCycleDurationMs = (practiceCycleSeconds ?? 0) * 1000;
+  const showPracticeCycleCountdown =
+    totalStrokes !== null &&
+    practiceCycleDurationMs > 0 &&
+    practiceCycleRemainingMs !== null &&
+    currentCycleNumber > 0 &&
+    (state === 'RUNNING' || state === 'PAUSED');
+  const practiceCycleRemainingSeconds = Math.ceil(
+    Math.max(0, practiceCycleRemainingMs ?? 0) / 1000,
+  );
+  const practiceCycleRemainingRatio = showPracticeCycleCountdown
+    ? Math.min(
+        1,
+        Math.max(
+          0,
+          (practiceCycleRemainingMs ?? 0) / practiceCycleDurationMs,
+        ),
+      )
+    : 0;
+  const practiceCycleRingOffset =
+    CYCLE_RING_CIRCUMFERENCE * (1 - practiceCycleRemainingRatio);
+  const nextPracticeCycleNumber =
+    totalStrokes !== null && currentCycleNumber < totalStrokes
+      ? currentCycleNumber + 1
+      : null;
+  const practiceCycleCountdownLabel =
+    nextPracticeCycleNumber === null
+      ? '練習完了まで'
+      : `${nextPracticeCycleNumber}本目のスタートまで`;
+  const practiceCycleCountdownColor =
+    state === 'PAUSED'
+      ? 'text-muted-foreground'
+      : practiceCycleRemainingSeconds <= 3
+        ? 'text-destructive'
+        : practiceCycleRemainingSeconds <= 10
+          ? 'text-accent'
+          : 'text-primary';
 
   return (
     <div className="h-[100dvh] w-full flex flex-col bg-background text-foreground overflow-hidden pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
@@ -505,10 +546,10 @@ export function TimerScreen() {
         )}
 
         {isTimerActive && (
-          <div className="flex flex-col items-center justify-center w-full h-full min-h-0">
+          <div className="flex flex-col items-center justify-center w-full h-full min-h-0 gap-1 sm:gap-3 py-1">
             {totalStrokes !== null && (
               <div
-                className={`mb-2 sm:mb-5 rounded-full border px-4 py-2 text-lg sm:text-3xl font-black ${
+                className={`rounded-full border px-4 py-1.5 text-base sm:text-2xl font-black ${
                   startFlash
                     ? 'border-primary bg-primary/15 text-primary'
                     : 'border-accent/60 bg-accent/10 text-accent'
@@ -522,29 +563,115 @@ export function TimerScreen() {
               </div>
             )}
 
-            <div className="text-lg sm:text-3xl font-bold text-muted-foreground tracking-[0.15em] sm:tracking-[0.25em] mb-1 sm:mb-3">
-              {waitingForCompletion ? '練習完了まで' : '次のスタートまで'}
-            </div>
+            {showPracticeCycleCountdown ? (
+              <>
+                <div
+                  className={`relative aspect-square w-[clamp(8.5rem,25vh,14rem)] shrink-0 ${practiceCycleCountdownColor}`}
+                  role="progressbar"
+                  aria-label={`${practiceCycleCountdownLabel}、あと${practiceCycleRemainingSeconds}秒`}
+                  aria-valuemin={0}
+                  aria-valuemax={practiceCycleSeconds ?? undefined}
+                  aria-valuenow={practiceCycleRemainingSeconds}
+                  data-testid="practice-cycle-countdown"
+                >
+                  <svg
+                    viewBox="0 0 120 120"
+                    className="absolute inset-0 h-full w-full drop-shadow-[0_0_18px_currentColor]"
+                    aria-hidden="true"
+                  >
+                    <circle
+                      cx="60"
+                      cy="60"
+                      r={CYCLE_RING_RADIUS}
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="8"
+                      className="opacity-15"
+                    />
+                    <circle
+                      cx="60"
+                      cy="60"
+                      r={CYCLE_RING_RADIUS}
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="8"
+                      strokeLinecap="round"
+                      strokeDasharray={CYCLE_RING_CIRCUMFERENCE}
+                      strokeDashoffset={practiceCycleRingOffset}
+                      transform="rotate(-90 60 60)"
+                      className="transition-[stroke-dashoffset,color] duration-200"
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center px-3 text-center">
+                    <div className="text-[10px] min-[380px]:text-xs sm:text-base font-bold tracking-wide text-muted-foreground normal-case">
+                      {practiceCycleCountdownLabel}
+                    </div>
+                    <div className="mt-0.5 flex items-baseline justify-center gap-1 leading-none">
+                      <span className="text-[clamp(2.75rem,8vh,5.5rem)] font-black tabular-nums tracking-tighter">
+                        {practiceCycleRemainingSeconds}
+                      </span>
+                      <span className="text-sm sm:text-xl font-black">秒</span>
+                    </div>
+                    {state === 'PAUSED' && (
+                      <div className="mt-1 text-[10px] sm:text-xs font-bold tracking-widest">
+                        一時停止中
+                      </div>
+                    )}
+                  </div>
+                </div>
 
-            <div
-              className={`text-[3.75rem] min-[380px]:text-[5rem] sm:text-[8rem] md:text-[12rem] font-black leading-none tabular-nums tracking-tighter transition-colors duration-200 drop-shadow-xl ${
-                state === 'PAUSED'
-                  ? 'text-muted-foreground'
-                  : countdown > 0
-                    ? 'text-destructive'
-                    : 'text-primary'
-              }`}
-              aria-live="polite"
-            >
-              {formatRemaining(remainingMs)}
-            </div>
+                {!waitingForCompletion && (
+                  <div className="flex items-baseline justify-center gap-2 rounded-full border border-border bg-card/70 px-3 py-1 text-muted-foreground">
+                    <span className="text-[10px] min-[380px]:text-xs sm:text-sm font-bold tracking-wide">
+                      次のスタート音まで
+                    </span>
+                    <span
+                      className={`text-2xl sm:text-4xl font-black leading-none tabular-nums tracking-tighter ${
+                        state === 'PAUSED'
+                          ? 'text-muted-foreground'
+                          : countdown > 0
+                            ? 'text-destructive'
+                            : 'text-primary'
+                      }`}
+                    >
+                      {formatRemaining(remainingMs)}
+                    </span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="text-lg sm:text-3xl font-bold text-muted-foreground tracking-[0.15em] sm:tracking-[0.25em] mb-1 sm:mb-3">
+                  {waitingForCompletion
+                    ? '練習完了まで'
+                    : '次のスタートまで'}
+                </div>
+
+                <div
+                  className={`text-[3.75rem] min-[380px]:text-[5rem] sm:text-[8rem] md:text-[12rem] font-black leading-none tabular-nums tracking-tighter transition-colors duration-200 drop-shadow-xl ${
+                    state === 'PAUSED'
+                      ? 'text-muted-foreground'
+                      : countdown > 0
+                        ? 'text-destructive'
+                        : 'text-primary'
+                  }`}
+                  aria-live="polite"
+                >
+                  {formatRemaining(remainingMs)}
+                </div>
+              </>
+            )}
 
             {(countdown > 0 || startFlash) && (
               <div
                 className={`font-black leading-none drop-shadow-[0_0_30px_rgba(255,165,0,0.6)] animate-pulse-fast ${
-                  startFlash
-                    ? 'text-[3.5rem] min-[380px]:text-[5rem] sm:text-[8rem] md:text-[12rem] text-primary'
-                    : 'text-[8rem] min-[380px]:text-[10rem] sm:text-[14rem] md:text-[20rem] text-accent'
+                  showPracticeCycleCountdown
+                    ? startFlash
+                      ? 'text-[2.5rem] min-[380px]:text-5xl sm:text-7xl text-primary'
+                      : 'text-[5rem] min-[380px]:text-7xl sm:text-9xl text-accent'
+                    : startFlash
+                      ? 'text-[3.5rem] min-[380px]:text-[5rem] sm:text-[8rem] md:text-[12rem] text-primary'
+                      : 'text-[8rem] min-[380px]:text-[10rem] sm:text-[14rem] md:text-[20rem] text-accent'
                 }`}
                 aria-live="assertive"
               >
