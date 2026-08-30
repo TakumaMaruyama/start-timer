@@ -14,6 +14,10 @@ import {
   Zap,
 } from 'lucide-react';
 import { useTimer } from '@/hooks/use-timer';
+import {
+  adjustPracticeCycleSeconds,
+  MAX_PRACTICE_CYCLE_SECONDS,
+} from '@/lib/practice-cycle';
 
 function formatRemaining(remainingMs: number) {
   const totalSeconds = Math.ceil(Math.max(0, remainingMs) / 1000);
@@ -205,6 +209,20 @@ export function TimerScreen() {
     changeTotalStrokes(totalStrokes === null ? 1 : totalStrokes + 1);
   };
 
+  const adjustCycle = (deltaSeconds: number) => {
+    const nextSeconds = adjustPracticeCycleSeconds(
+      practiceCycleSeconds,
+      deltaSeconds,
+    );
+    if (nextSeconds === null) {
+      changeCycleMinutes(null);
+      changeCycleSeconds(null);
+      return;
+    }
+    changeCycleMinutes(Math.floor(nextSeconds / 60));
+    changeCycleSeconds(nextSeconds % 60);
+  };
+
   const presets = [5, 10, 15, 20, 30];
   const cycleLabel = formatCycleLabel(practiceCycleSeconds);
   const cycleRequired = totalStrokes !== null && !canStart;
@@ -327,44 +345,112 @@ export function TimerScreen() {
                 </h2>
                 <form
                   onSubmit={commitCycle}
-                  className="mt-2 flex items-end justify-center gap-2"
+                  className="mt-2 flex flex-col items-center gap-2"
                 >
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    min={0}
-                    max={99}
-                    step={1}
-                    value={cycleMinutesInput}
-                    onChange={handleCycleMinutesInput}
-                    onBlur={commitCycle}
-                    placeholder="--"
-                    aria-label="練習サイクルの分"
-                    className="w-16 h-11 bg-transparent text-center text-3xl font-black tabular-nums border-b-4 border-accent placeholder:text-muted-foreground focus:outline-none focus:border-primary"
-                    data-testid="input-cycle-minutes"
-                  />
-                  <span className="mb-1 text-sm font-bold text-muted-foreground">
-                    分
-                  </span>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    min={0}
-                    max={59}
-                    step={1}
-                    value={cycleSecondsInput}
-                    onChange={handleCycleSecondsInput}
-                    onBlur={commitCycle}
-                    placeholder="--"
-                    aria-label="練習サイクルの秒"
-                    className="w-16 h-11 bg-transparent text-center text-3xl font-black tabular-nums border-b-4 border-accent placeholder:text-muted-foreground focus:outline-none focus:border-primary"
-                    data-testid="input-cycle-seconds"
-                  />
-                  <span className="mb-1 text-sm font-bold text-muted-foreground">
-                    秒
-                  </span>
+                  <div className="flex items-end justify-center gap-2">
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      min={0}
+                      max={99}
+                      step={1}
+                      value={cycleMinutesInput}
+                      onChange={handleCycleMinutesInput}
+                      onBlur={commitCycle}
+                      placeholder="--"
+                      aria-label="練習サイクルの分"
+                      className="w-14 h-11 bg-transparent text-center text-3xl font-black tabular-nums border-b-4 border-accent placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+                      data-testid="input-cycle-minutes"
+                    />
+                    <span className="mb-1 text-sm font-bold text-muted-foreground">
+                      分
+                    </span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      min={0}
+                      max={59}
+                      step={1}
+                      value={cycleSecondsInput}
+                      onChange={handleCycleSecondsInput}
+                      onBlur={commitCycle}
+                      placeholder="--"
+                      aria-label="練習サイクルの秒"
+                      className="w-14 h-11 bg-transparent text-center text-3xl font-black tabular-nums border-b-4 border-accent placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+                      data-testid="input-cycle-seconds"
+                    />
+                    <span className="mb-1 text-sm font-bold text-muted-foreground">
+                      秒
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 w-full max-w-[220px]">
+                    <button
+                      type="button"
+                      onClick={() => adjustCycle(-60)}
+                      disabled={(practiceCycleSeconds ?? 0) < 60}
+                      aria-label="練習サイクルを1分減らす"
+                      className="h-10 rounded-lg bg-secondary px-2 text-xs font-bold text-accent active:scale-95 transition-all disabled:opacity-35 disabled:pointer-events-none"
+                      data-testid="button-dec-cycle-minute"
+                    >
+                      −1分
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => adjustCycle(60)}
+                      disabled={
+                        (practiceCycleSeconds ?? 0) >
+                        MAX_PRACTICE_CYCLE_SECONDS - 60
+                      }
+                      aria-label="練習サイクルを1分増やす"
+                      className="h-10 rounded-lg bg-secondary px-2 text-xs font-bold text-accent active:scale-95 transition-all disabled:opacity-35 disabled:pointer-events-none"
+                      data-testid="button-inc-cycle-minute"
+                    >
+                      ＋1分
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1 w-full max-w-[220px]">
+                    {[
+                      {
+                        delta: -10,
+                        label: '10秒減らす',
+                        testId: 'button-dec-cycle-10',
+                      },
+                      {
+                        delta: -5,
+                        label: '5秒減らす',
+                        testId: 'button-dec-cycle-5',
+                      },
+                      {
+                        delta: 5,
+                        label: '5秒増やす',
+                        testId: 'button-inc-cycle-5',
+                      },
+                      {
+                        delta: 10,
+                        label: '10秒増やす',
+                        testId: 'button-inc-cycle-10',
+                      },
+                    ].map(({ delta, label, testId }) => (
+                      <button
+                        key={delta}
+                        type="button"
+                        onClick={() => adjustCycle(delta)}
+                        disabled={
+                          delta < 0
+                            ? (practiceCycleSeconds ?? 0) < -delta
+                            : (practiceCycleSeconds ?? 0) >
+                              MAX_PRACTICE_CYCLE_SECONDS - delta
+                        }
+                        aria-label={`練習サイクルを${label}`}
+                        className="h-10 rounded-lg bg-secondary px-1 text-xs font-bold text-accent active:scale-95 transition-all disabled:opacity-35 disabled:pointer-events-none"
+                        data-testid={testId}
+                      >
+                        {delta > 0 ? `＋${delta}秒` : `−${-delta}秒`}
+                      </button>
+                    ))}
+                  </div>
                 </form>
                 <p
                   className={`mt-2 text-xs sm:text-sm font-bold normal-case ${
