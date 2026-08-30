@@ -546,7 +546,7 @@ export function TimerScreen() {
         )}
 
         {isTimerActive && (
-          <div className="flex flex-col items-center justify-center w-full h-full min-h-0 gap-1 sm:gap-3 py-1">
+          <div className="relative flex flex-col items-center justify-center w-full h-full min-h-0 gap-1 sm:gap-3 py-1">
             {totalStrokes !== null && (
               <div
                 className={`rounded-full border px-4 py-1.5 text-base sm:text-2xl font-black ${
@@ -664,18 +664,22 @@ export function TimerScreen() {
 
             {(countdown > 0 || startFlash) && (
               <div
-                className={`font-black leading-none drop-shadow-[0_0_30px_rgba(255,165,0,0.6)] animate-pulse-fast ${
-                  showPracticeCycleCountdown
-                    ? startFlash
-                      ? 'text-[2.5rem] min-[380px]:text-5xl sm:text-7xl text-primary'
-                      : 'text-[5rem] min-[380px]:text-7xl sm:text-9xl text-accent'
-                    : startFlash
-                      ? 'text-[3.5rem] min-[380px]:text-[5rem] sm:text-[8rem] md:text-[12rem] text-primary'
-                      : 'text-[8rem] min-[380px]:text-[10rem] sm:text-[14rem] md:text-[20rem] text-accent'
-                }`}
+                className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-2 text-center"
                 aria-live="assertive"
               >
-                {startFlash ? 'スタート！' : countdown}
+                <span
+                  className={`font-black leading-none drop-shadow-[0_0_30px_rgba(255,165,0,0.6)] animate-pulse-fast ${
+                    showPracticeCycleCountdown
+                      ? startFlash
+                        ? 'text-[2.5rem] min-[380px]:text-5xl sm:text-7xl text-primary'
+                        : 'text-[5rem] min-[380px]:text-7xl sm:text-9xl text-accent'
+                      : startFlash
+                        ? 'text-[3.5rem] min-[380px]:text-[5rem] sm:text-[8rem] md:text-[12rem] text-primary'
+                        : 'text-[8rem] min-[380px]:text-[10rem] sm:text-[14rem] md:text-[20rem] text-accent'
+                  }`}
+                >
+                  {startFlash ? 'スタート！' : countdown}
+                </span>
               </div>
             )}
           </div>
