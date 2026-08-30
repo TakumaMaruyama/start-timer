@@ -254,13 +254,17 @@ export function TimerScreen() {
 
   return (
     <div className="h-[100dvh] w-full flex flex-col bg-background text-foreground overflow-hidden pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
-      <header className="shrink-0 p-4 border-b border-border/50">
+      <header className="timer-header shrink-0 p-4 border-b border-border/50">
         <div className="font-bold tracking-widest text-primary text-xs sm:text-base">
           SWIM START TIMER
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-start p-3 sm:p-4 relative z-10 min-h-0 overflow-y-auto overscroll-y-contain">
+      <main
+        className={`flex-1 flex flex-col items-center justify-start p-3 sm:p-4 relative z-10 min-h-0 overflow-y-auto overscroll-y-contain ${
+          state === 'IDLE' ? '' : 'timer-display-main'
+        }`}
+      >
         {state === 'IDLE' && (
           <div className="my-auto flex flex-col items-center w-full max-w-lg gap-3 sm:gap-5 py-2 animate-in fade-in zoom-in duration-300">
             <section className="text-center space-y-1">
@@ -547,7 +551,7 @@ export function TimerScreen() {
         )}
 
         {isTimerActive && (
-          <div className="relative flex flex-col items-center justify-center w-full h-full min-h-0 gap-1 sm:gap-3 py-1">
+          <div className="timer-active-content relative flex flex-col items-center justify-center w-full h-full min-h-0 gap-1 sm:gap-3 py-1">
             {totalStrokes !== null && (
               <div
                 className={`rounded-full border px-4 py-1.5 text-base sm:text-2xl font-black ${
@@ -567,7 +571,7 @@ export function TimerScreen() {
             {showPracticeCycleCountdown ? (
               <>
                 <div
-                  className={`relative aspect-square w-[clamp(8.5rem,25vh,14rem)] shrink-0 ${practiceCycleCountdownColor}`}
+                  className={`timer-cycle-ring relative aspect-square w-[clamp(8.5rem,25vh,14rem)] shrink-0 ${practiceCycleCountdownColor}`}
                   role="progressbar"
                   aria-label={`${practiceCycleCountdownLabel}、あと${practiceCycleRemainingSeconds}秒`}
                   aria-valuemin={0}
@@ -635,7 +639,7 @@ export function TimerScreen() {
                 </div>
 
                 {!waitingForCompletion && (
-                  <div className="flex flex-col items-center justify-center gap-0.5 rounded-2xl border-2 border-border bg-card/80 px-5 py-2 text-muted-foreground shadow-lg min-[480px]:flex-row min-[480px]:gap-4 min-[480px]:rounded-full min-[480px]:px-6">
+                  <div className="timer-next-tone flex flex-col items-center justify-center gap-0.5 rounded-2xl border-2 border-border bg-card/80 px-5 py-2 text-muted-foreground shadow-lg min-[480px]:flex-row min-[480px]:gap-4 min-[480px]:rounded-full min-[480px]:px-6">
                     <span className="text-sm min-[380px]:text-base sm:text-xl font-bold tracking-wide whitespace-nowrap">
                       次のスタート音まで
                     </span>
@@ -682,7 +686,7 @@ export function TimerScreen() {
 
         {state === 'COMPLETE' && totalStrokes !== null && (
           <div
-            className="my-auto flex flex-col items-center justify-center text-center animate-in fade-in zoom-in duration-300"
+            className="timer-complete my-auto flex flex-col items-center justify-center text-center animate-in fade-in zoom-in duration-300"
             aria-live="assertive"
             data-testid="practice-complete"
           >
@@ -699,7 +703,11 @@ export function TimerScreen() {
         )}
       </main>
 
-      <footer className="shrink-0 p-4 sm:p-6 pb-6 sm:pb-12 bg-background/80 backdrop-blur-md border-t border-border/50 relative z-20">
+      <footer
+        className={`shrink-0 p-4 sm:p-6 pb-6 sm:pb-12 bg-background/80 backdrop-blur-md border-t border-border/50 relative z-20 ${
+          state === 'IDLE' ? '' : 'timer-landscape-hidden-controls'
+        }`}
+      >
         <div className="max-w-2xl mx-auto flex justify-center gap-3 sm:gap-8">
           {state === 'IDLE' && (
             <button
