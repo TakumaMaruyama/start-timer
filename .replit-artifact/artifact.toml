@@ -12,12 +12,12 @@ paths = [ "/" ]
 localPort = 23382
 
 [services.development]
-run = "pnpm --filter @workspace/swim-start-timer run dev"
+run = "pnpm run dev"
 
 [services.production]
-build = [ "pnpm", "--filter", "@workspace/swim-start-timer", "run", "build" ]
+build = [ "pnpm", "run", "build" ]
 serve = "static"
-publicDir = "artifacts/swim-start-timer/dist/public"
+publicDir = "dist/public"
 
 [[services.production.rewrites]]
 from = "/*"
