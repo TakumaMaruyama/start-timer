@@ -214,9 +214,10 @@ export function TimerScreen() {
   const isTimerActive =
     state === 'COUNTDOWN' || state === 'RUNNING' || state === 'PAUSED';
   const practiceCycleDurationMs = (practiceCycleSeconds ?? 0) * 1000;
+  const hasConfiguredPracticeCycle =
+    totalStrokes !== null && practiceCycleDurationMs > 0;
   const showPracticeCycleCountdown =
-    totalStrokes !== null &&
-    practiceCycleDurationMs > 0 &&
+    hasConfiguredPracticeCycle &&
     practiceCycleRemainingMs !== null &&
     currentCycleNumber > 0 &&
     (state === 'RUNNING' || state === 'PAUSED');
@@ -664,15 +665,19 @@ export function TimerScreen() {
 
             {(countdown > 0 || startFlash) && (
               <div
-                className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-2 text-center"
+                className={`pointer-events-none absolute z-10 flex justify-center px-2 text-center ${
+                  hasConfiguredPracticeCycle
+                    ? 'right-3 top-2 sm:right-6 sm:top-4'
+                    : 'inset-0 items-center'
+                }`}
                 aria-live="assertive"
               >
                 <span
                   className={`font-black leading-none drop-shadow-[0_0_30px_rgba(255,165,0,0.6)] animate-pulse-fast ${
-                    showPracticeCycleCountdown
+                    hasConfiguredPracticeCycle
                       ? startFlash
-                        ? 'text-[2.5rem] min-[380px]:text-5xl sm:text-7xl text-primary'
-                        : 'text-[5rem] min-[380px]:text-7xl sm:text-9xl text-accent'
+                        ? 'text-[2.25rem] min-[380px]:text-4xl sm:text-5xl text-primary'
+                        : 'text-[4rem] min-[380px]:text-6xl sm:text-7xl text-accent'
                       : startFlash
                         ? 'text-[3.5rem] min-[380px]:text-[5rem] sm:text-[8rem] md:text-[12rem] text-primary'
                         : 'text-[8rem] min-[380px]:text-[10rem] sm:text-[14rem] md:text-[20rem] text-accent'
