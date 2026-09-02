@@ -7,8 +7,11 @@ import {
   scheduleStartToneAt,
 } from '@/lib/audio';
 import {
+  INITIAL_START_COUNTDOWN_MS,
+  isValidCourseSwimmers,
   isValidPracticeCycleSeconds,
   isValidTotalStrokes,
+  nextStartToneAtOrAfter,
   practiceCycleStatusAt,
   shouldScheduleStartAt,
 } from '@/lib/progress';
@@ -25,6 +28,7 @@ const PREVIEW_STEPS = [
   { offsetMs: 2000 },
   { offsetMs: 1000 },
 ] as const;
+const NEXT_START_EPSILON_MS = 0.01;
 const UNLIMITED_SCHEDULE_BATCH_SIZE = 12;
 
 export function useTimer(initialInterval = 10) {
@@ -34,6 +38,7 @@ export function useTimer(initialInterval = 10) {
   const [cycleMinutes, setCycleMinutes] = useState<number | null>(null);
   const [cycleSeconds, setCycleSeconds] = useState<number | null>(null);
   const [totalStrokes, setTotalStrokes] = useState<number | null>(null);
+  const [courseSwimmers, setCourseSwimmers] = useState<number | null>(null);
   const [state, setState] = useState<TimerState>('IDLE');
   const [remainingMs, setRemainingMs] = useState(0);
   const [countdown, setCountdown] = useState(0);
@@ -49,8 +54,10 @@ export function useTimer(initialInterval = 10) {
   const practiceCycleSeconds = cycleConfigured
     ? (cycleMinutes ?? 0) * 60 + (cycleSeconds ?? 0)
     : null;
+  const practiceCycleRequired =
+    totalStrokes !== null || courseSwimmers !== null;
   const canStart =
-    totalStrokes === null ||
+    !practiceCycleRequired ||
     isValidPracticeCycleSeconds(practiceCycleSeconds);
 
   const stateRef = useRef(state);
@@ -59,6 +66,7 @@ export function useTimer(initialInterval = 10) {
     practiceCycleSeconds,
   );
   const totalStrokesRef = useRef<number | null>(totalStrokes);
+  const courseSwimmersRef = useRef<number | null>(courseSwimmers);
   const countdownStartRef = useRef(0);
   const firstStartAtRef = useRef(0);
   const nextStartAtRef = useRef(0);
@@ -95,6 +103,10 @@ export function useTimer(initialInterval = 10) {
   useEffect(() => {
     totalStrokesRef.current = totalStrokes;
   }, [totalStrokes]);
+
+  useEffect(() => {
+    courseSwimmersRef.current = courseSwimmers;
+  }, [courseSwimmers]);
 
   const requestWakeLock = useCallback(async () => {
     const generation = commandGenerationRef.current;
@@ -185,6 +197,20 @@ export function useTimer(initialInterval = 10) {
     [],
   );
 
+  const nextAllowedStartAt = useCallback((fromPerformanceMs: number) => {
+    const cycleDurationSeconds = practiceCycleSecondsRef.current;
+    return nextStartToneAtOrAfter(fromPerformanceMs, {
+      firstStartAtPerformanceMs: firstStartAtRef.current,
+      intervalMs: intervalRef.current * 1000,
+      practiceCycleDurationMs:
+        cycleDurationSeconds === null
+          ? null
+          : cycleDurationSeconds * 1000,
+      courseSwimmers: courseSwimmersRef.current,
+      completionAtPerformanceMs: completionAtRef.current,
+    });
+  }, []);
+
   const scheduleCycleAudio = useCallback(
     (nextStartAtPerformanceMs: number) => {
       if (
@@ -213,44 +239,43 @@ export function useTimer(initialInterval = 10) {
 
   const scheduleUpcomingAudio = useCallback(
     (fromStartAtPerformanceMs: number) => {
-      const periodMs = intervalRef.current * 1000;
-      if (
-        scheduledThroughRef.current >
-        fromStartAtPerformanceMs + periodMs * 6
-      ) {
+      // This ref stores the first not-yet-scheduled tone. Equality means the
+      // boundary tone still needs to be scheduled; only a later value returns.
+      if (scheduledThroughRef.current > fromStartAtPerformanceMs) {
         return;
       }
-      const firstStartAt = Math.max(
-        fromStartAtPerformanceMs,
-        scheduledThroughRef.current,
-      );
-      const batchLimit = Math.min(
-        completionAtRef.current,
-        firstStartAt + periodMs * UNLIMITED_SCHEDULE_BATCH_SIZE,
-      );
 
-      let target = firstStartAt;
-      while (target < batchLimit) {
+      let target = nextAllowedStartAt(
+        fromStartAtPerformanceMs,
+      );
+      let scheduledCount = 0;
+      while (
+        target !== null &&
+        scheduledCount < UNLIMITED_SCHEDULE_BATCH_SIZE
+      ) {
         scheduleCycleAudio(target);
-        target += periodMs;
+        scheduledCount += 1;
+        target = nextAllowedStartAt(target + NEXT_START_EPSILON_MS);
       }
-      scheduledThroughRef.current = target;
+      scheduledThroughRef.current =
+        target ?? completionAtRef.current;
     },
-    [scheduleCycleAudio],
+    [nextAllowedStartAt, scheduleCycleAudio],
   );
 
   const scheduleInitialAudio = useCallback(
     (countdownStartPerformanceMs: number) => {
       PREVIEW_STEPS.forEach(({ offsetMs }) => {
         scheduleToneAtPerformanceTime(
-          countdownStartPerformanceMs + (3000 - offsetMs),
+          countdownStartPerformanceMs +
+            (INITIAL_START_COUNTDOWN_MS - offsetMs),
           (audioTime) => {
             schedulePreviewToneAt(audioTime);
           },
         );
       });
       scheduleToneAtPerformanceTime(
-        countdownStartPerformanceMs + 3000,
+        countdownStartPerformanceMs + INITIAL_START_COUNTDOWN_MS,
         (audioTime) => {
           scheduleStartToneAt(audioTime);
         },
@@ -340,41 +365,49 @@ export function useTimer(initialInterval = 10) {
     const now = performance.now();
 
     if (stateRef.current === 'COUNTDOWN') {
-      const expectedFirstStartAt = countdownStartRef.current + 3000;
+      const expectedFirstStartAt =
+        countdownStartRef.current + INITIAL_START_COUNTDOWN_MS;
       if (now < expectedFirstStartAt) {
         scheduleInitialAudio(countdownStartRef.current);
         return;
       }
 
-      firstStartAtRef.current = now;
+      firstStartAtRef.current = expectedFirstStartAt;
       const cycleDurationSeconds = practiceCycleSecondsRef.current;
       const total = totalStrokesRef.current;
       completionAtRef.current =
         total !== null &&
         cycleDurationSeconds !== null &&
         isValidPracticeCycleSeconds(cycleDurationSeconds)
-          ? now + total * cycleDurationSeconds * 1000
+          ? expectedFirstStartAt + total * cycleDurationSeconds * 1000
           : Number.POSITIVE_INFINITY;
 
+      if (now >= completionAtRef.current) {
+        finishPractice();
+        return;
+      }
+
+      // The first scheduled tone could not play while audio was suspended.
+      // Replace that missed tone once on return without moving the absolute
+      // practice-cycle grid, then continue from the next allowed grid point.
       scheduleToneAtPerformanceTime(now, (audioTime) => {
         scheduleStartToneAt(audioTime);
       });
-      currentCycleNumberRef.current = 1;
-      setCurrentCycleNumber(1);
       updatePracticeCycleProgress(now);
-      nextStartAtRef.current = now + intervalRef.current * 1000;
-      setRemainingMs(intervalRef.current * 1000);
+      const nextStartAt = nextAllowedStartAt(
+        now + NEXT_START_EPSILON_MS,
+      );
+      nextStartAtRef.current =
+        nextStartAt ?? completionAtRef.current;
+      setRemainingMs(
+        Math.max(0, nextStartAtRef.current - now),
+      );
       setCountdown(0);
       stateRef.current = 'RUNNING';
       setState('RUNNING');
       flashStart();
 
-      if (
-        shouldScheduleStartAt(
-          nextStartAtRef.current,
-          completionAtRef.current,
-        )
-      ) {
+      if (nextStartAt !== null) {
         scheduleUpcomingAudio(nextStartAtRef.current);
       } else {
         enterCompletionWait(now);
@@ -394,17 +427,9 @@ export function useTimer(initialInterval = 10) {
       return;
     }
 
-    const periodMs = intervalRef.current * 1000;
-    while (nextStartAtRef.current <= now) {
-      nextStartAtRef.current += periodMs;
-    }
-
-    if (
-      shouldScheduleStartAt(
-        nextStartAtRef.current,
-        completionAtRef.current,
-      )
-    ) {
+    const nextStartAt = nextAllowedStartAt(now);
+    if (nextStartAt !== null) {
+      nextStartAtRef.current = nextStartAt;
       setRemainingMs(nextStartAtRef.current - now);
       setCountdown(
         nextStartAtRef.current - now <= 3000
@@ -419,8 +444,9 @@ export function useTimer(initialInterval = 10) {
     enterCompletionWait,
     finishPractice,
     flashStart,
-    scheduleCycleAudio,
+    nextAllowedStartAt,
     scheduleInitialAudio,
+    scheduleUpcomingAudio,
     scheduleToneAtPerformanceTime,
     updatePracticeCycleProgress,
   ]);
@@ -454,13 +480,16 @@ export function useTimer(initialInterval = 10) {
 
     if (currentState === 'COUNTDOWN') {
       const elapsed = now - countdownStartRef.current;
-      const countdownRemaining = Math.max(0, 3000 - elapsed);
+      const countdownRemaining = Math.max(
+        0,
+        INITIAL_START_COUNTDOWN_MS - elapsed,
+      );
       setRemainingMs(countdownRemaining);
       setCountdown(
         countdownRemaining > 0 ? Math.ceil(countdownRemaining / 1000) : 0,
       );
 
-      if (elapsed >= 3000) {
+      if (elapsed >= INITIAL_START_COUNTDOWN_MS) {
         currentCycleNumberRef.current = 1;
         setCurrentCycleNumber(1);
         updatePracticeCycleProgress(now);
@@ -469,6 +498,14 @@ export function useTimer(initialInterval = 10) {
         stateRef.current = 'RUNNING';
         setState('RUNNING');
         flashStart();
+        if (
+          !shouldScheduleStartAt(
+            nextStartAtRef.current,
+            completionAtRef.current,
+          )
+        ) {
+          enterCompletionWait(now);
+        }
       }
     } else if (currentState === 'RUNNING') {
       if (now >= completionAtRef.current) {
@@ -491,21 +528,12 @@ export function useTimer(initialInterval = 10) {
           if (getAudioContext()?.state !== 'running') {
             void resyncAudioAfterVisibility();
           } else {
-            const periodMs = intervalRef.current * 1000;
-            const missedAfterTone = Math.max(
-              0,
-              Math.floor((now - target) / periodMs),
+            const nextTarget = nextAllowedStartAt(
+              Math.max(now, target) + NEXT_START_EPSILON_MS,
             );
-            const nextTarget =
-              target + (missedAfterTone + 1) * periodMs;
             flashStart();
 
-            if (
-              shouldScheduleStartAt(
-                nextTarget,
-                completionAtRef.current,
-              )
-            ) {
+            if (nextTarget !== null) {
               nextStartAtRef.current = nextTarget;
               waitingForCompletionRef.current = false;
               setWaitingForCompletion(false);
@@ -533,6 +561,7 @@ export function useTimer(initialInterval = 10) {
     enterCompletionWait,
     finishPractice,
     flashStart,
+    nextAllowedStartAt,
     resyncAudioAfterVisibility,
     scheduleUpcomingAudio,
     updatePracticeCycleProgress,
@@ -559,7 +588,8 @@ export function useTimer(initialInterval = 10) {
     if (
       stateRef.current !== 'IDLE' ||
       startPendingRef.current ||
-      (totalStrokesRef.current !== null &&
+      ((totalStrokesRef.current !== null ||
+        courseSwimmersRef.current !== null) &&
         !isValidPracticeCycleSeconds(
           practiceCycleSecondsRef.current,
         ))
@@ -593,32 +623,33 @@ export function useTimer(initialInterval = 10) {
     startPendingRef.current = false;
 
     const countdownStart = performance.now();
-    const firstStartAt = countdownStart + 3000;
+    const firstStartAt = countdownStart + INITIAL_START_COUNTDOWN_MS;
     const cycleDurationSeconds = practiceCycleSecondsRef.current;
     const total = totalStrokesRef.current;
 
     countdownStartRef.current = countdownStart;
     firstStartAtRef.current = firstStartAt;
-    nextStartAtRef.current =
-      firstStartAt + intervalRef.current * 1000;
     completionAtRef.current =
       total !== null &&
       cycleDurationSeconds !== null &&
       isValidPracticeCycleSeconds(cycleDurationSeconds)
         ? firstStartAt + total * cycleDurationSeconds * 1000
         : Number.POSITIVE_INFINITY;
+    nextStartAtRef.current =
+      nextAllowedStartAt(firstStartAt + NEXT_START_EPSILON_MS) ??
+      completionAtRef.current;
     currentCycleNumberRef.current = 0;
     waitingForCompletionRef.current = false;
     setCurrentCycleNumber(0);
     setPracticeCycleRemainingMs(null);
     setWaitingForCompletion(false);
-    setRemainingMs(3000);
-    setCountdown(3);
+    setRemainingMs(INITIAL_START_COUNTDOWN_MS);
+    setCountdown(INITIAL_START_COUNTDOWN_MS / 1000);
     stateRef.current = 'COUNTDOWN';
     setState('COUNTDOWN');
     void requestWakeLock();
     scheduleInitialAudio(countdownStart);
-  }, [requestWakeLock, scheduleInitialAudio]);
+  }, [nextAllowedStartAt, requestWakeLock, scheduleInitialAudio]);
 
   const pause = useCallback(() => {
     if (stateRef.current !== 'RUNNING') return;
@@ -772,6 +803,13 @@ export function useTimer(initialInterval = 10) {
     }
   }, []);
 
+  const changeCourseSwimmers = useCallback((value: number | null) => {
+    if (isValidCourseSwimmers(value)) {
+      courseSwimmersRef.current = value;
+      setCourseSwimmers(value);
+    }
+  }, []);
+
   return {
     intervalSec,
     changeInterval,
@@ -782,6 +820,8 @@ export function useTimer(initialInterval = 10) {
     changeCycleSeconds,
     totalStrokes,
     changeTotalStrokes,
+    courseSwimmers,
+    changeCourseSwimmers,
     canStart,
     state,
     remainingMs,

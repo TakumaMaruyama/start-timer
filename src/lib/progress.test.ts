@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  adjustCourseSwimmers,
   adjustTotalStrokes,
+  INITIAL_START_COUNTDOWN_MS,
   MAX_TOTAL_STROKES,
+  nextStartToneAtOrAfter,
   practiceCycleStatusAt,
 } from './progress.ts';
+
+test('allows ten seconds to prepare before the initial start', () => {
+  assert.equal(INITIAL_START_COUNTDOWN_MS, 10_000);
+});
 
 test('adjusts a configured total by one or five', () => {
   assert.equal(adjustTotalStrokes(10, -5), 5);
@@ -68,4 +75,100 @@ test('counts the final cycle down to practice completion', () => {
 test('rejects invalid practice-cycle progress inputs', () => {
   assert.equal(practiceCycleStatusAt(1_000, 1_000, 0, 3), null);
   assert.equal(practiceCycleStatusAt(1_000, 1_000, 60_000, 0), null);
+});
+
+test('adjusts an optional course size by one or five', () => {
+  assert.equal(adjustCourseSwimmers(null, 1), 1);
+  assert.equal(adjustCourseSwimmers(1, 5), 6);
+  assert.equal(adjustCourseSwimmers(6, -5), 1);
+  assert.equal(adjustCourseSwimmers(1, -1), null);
+});
+
+const cappedSchedule = {
+  firstStartAtPerformanceMs: 1_000,
+  intervalMs: 10_000,
+  practiceCycleDurationMs: 60_000,
+  courseSwimmers: 5,
+  completionAtPerformanceMs: 181_000,
+};
+
+test('limits start tones to the course size within each practice cycle', () => {
+  assert.equal(nextStartToneAtOrAfter(1_000, cappedSchedule), 1_000);
+  assert.equal(nextStartToneAtOrAfter(1_001, cappedSchedule), 11_000);
+  assert.equal(nextStartToneAtOrAfter(41_001, cappedSchedule), 61_000);
+  assert.equal(nextStartToneAtOrAfter(61_001, cappedSchedule), 71_000);
+});
+
+test('keeps exact practice-cycle boundaries available only once', () => {
+  assert.equal(nextStartToneAtOrAfter(60_999, cappedSchedule), 61_000);
+  assert.equal(nextStartToneAtOrAfter(61_000, cappedSchedule), 61_000);
+  assert.equal(nextStartToneAtOrAfter(61_001, cappedSchedule), 71_000);
+});
+
+test('with one swimmer, skips directly to the next practice cycle', () => {
+  const oneSwimmerSchedule = {
+    ...cappedSchedule,
+    courseSwimmers: 1,
+  };
+  assert.equal(
+    nextStartToneAtOrAfter(1_001, oneSwimmerSchedule),
+    61_000,
+  );
+  assert.equal(
+    nextStartToneAtOrAfter(61_001, oneSwimmerSchedule),
+    121_000,
+  );
+});
+
+test('starts the next cycle on its absolute boundary without drift', () => {
+  assert.equal(nextStartToneAtOrAfter(55_000, cappedSchedule), 61_000);
+  assert.equal(nextStartToneAtOrAfter(126_000, cappedSchedule), 131_000);
+});
+
+test('uses fewer tones when a cycle is shorter than the requested course size', () => {
+  const shortCycleSchedule = {
+    ...cappedSchedule,
+    practiceCycleDurationMs: 25_000,
+    completionAtPerformanceMs: 76_000,
+  };
+  assert.equal(
+    nextStartToneAtOrAfter(21_001, shortCycleSchedule),
+    26_000,
+  );
+});
+
+test('starts each new cycle when the interval is longer than the cycle', () => {
+  const veryShortCycleSchedule = {
+    ...cappedSchedule,
+    practiceCycleDurationMs: 5_000,
+    completionAtPerformanceMs: 16_000,
+  };
+  assert.equal(
+    nextStartToneAtOrAfter(1_001, veryShortCycleSchedule),
+    6_000,
+  );
+  assert.equal(
+    nextStartToneAtOrAfter(6_001, veryShortCycleSchedule),
+    11_000,
+  );
+});
+
+test('does not schedule a tone at or after practice completion', () => {
+  assert.equal(
+    nextStartToneAtOrAfter(121_001, {
+      ...cappedSchedule,
+      completionAtPerformanceMs: 121_000,
+    }),
+    null,
+  );
+});
+
+test('keeps the existing unlimited absolute interval schedule', () => {
+  assert.equal(
+    nextStartToneAtOrAfter(26_000, {
+      ...cappedSchedule,
+      courseSwimmers: null,
+    }),
+    31_000,
+  );
 });

@@ -18,7 +18,9 @@ import {
   MAX_PRACTICE_CYCLE_SECONDS,
 } from '@/lib/practice-cycle';
 import {
+  adjustCourseSwimmers,
   adjustTotalStrokes,
+  MAX_COURSE_SWIMMERS,
   MAX_TOTAL_STROKES,
 } from '@/lib/progress';
 
@@ -45,6 +47,8 @@ export function TimerScreen() {
     changeCycleSeconds,
     totalStrokes,
     changeTotalStrokes,
+    courseSwimmers,
+    changeCourseSwimmers,
     canStart,
     state,
     remainingMs,
@@ -63,6 +67,7 @@ export function TimerScreen() {
   const [cycleMinutesInput, setCycleMinutesInput] = useState('');
   const [cycleSecondsInput, setCycleSecondsInput] = useState('');
   const [totalInput, setTotalInput] = useState('');
+  const [courseSwimmersInput, setCourseSwimmersInput] = useState('');
 
   useEffect(() => {
     setIntervalInput(intervalSec.toString());
@@ -81,6 +86,10 @@ export function TimerScreen() {
   useEffect(() => {
     setTotalInput(totalStrokes?.toString() ?? '');
   }, [totalStrokes]);
+
+  useEffect(() => {
+    setCourseSwimmersInput(courseSwimmers?.toString() ?? '');
+  }, [courseSwimmers]);
 
   const commitInterval = (event: FormEvent) => {
     event.preventDefault();
@@ -195,6 +204,52 @@ export function TimerScreen() {
     changeTotalStrokes(adjustTotalStrokes(totalStrokes, delta));
   };
 
+  const commitCourseSwimmers = (event: FormEvent) => {
+    event.preventDefault();
+    if (courseSwimmersInput === '') {
+      changeCourseSwimmers(null);
+      return;
+    }
+
+    const value = Number(courseSwimmersInput);
+    if (
+      Number.isInteger(value) &&
+      value >= 1 &&
+      value <= MAX_COURSE_SWIMMERS
+    ) {
+      changeCourseSwimmers(value);
+    } else {
+      setCourseSwimmersInput(courseSwimmers?.toString() ?? '');
+    }
+  };
+
+  const handleCourseSwimmersInput = (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const value = event.target.value;
+    setCourseSwimmersInput(value);
+
+    if (value === '') {
+      changeCourseSwimmers(null);
+      return;
+    }
+
+    const numericValue = Number(value);
+    if (
+      Number.isInteger(numericValue) &&
+      numericValue >= 1 &&
+      numericValue <= MAX_COURSE_SWIMMERS
+    ) {
+      changeCourseSwimmers(numericValue);
+    }
+  };
+
+  const adjustCourse = (delta: number) => {
+    changeCourseSwimmers(
+      adjustCourseSwimmers(courseSwimmers, delta),
+    );
+  };
+
   const adjustCycle = (deltaSeconds: number) => {
     const nextSeconds = adjustPracticeCycleSeconds(
       practiceCycleSeconds,
@@ -210,7 +265,8 @@ export function TimerScreen() {
   };
 
   const presets = [5, 10, 15, 20, 30];
-  const cycleRequired = totalStrokes !== null && !canStart;
+  const cycleRequired =
+    (totalStrokes !== null || courseSwimmers !== null) && !canStart;
   const isTimerActive =
     state === 'COUNTDOWN' || state === 'RUNNING' || state === 'PAUSED';
   const practiceCycleDurationMs = (practiceCycleSeconds ?? 0) * 1000;
@@ -461,8 +517,8 @@ export function TimerScreen() {
                     data-testid="text-cycle-summary"
                   >
                     {cycleRequired
-                      ? '合計本数を入力する場合は必須です'
-                      : '合計本数を使う場合に設定'}
+                      ? '合計本数・コース人数を使う場合は必須です'
+                      : '合計本数・コース人数を使う場合に設定'}
                   </p>
                 )}
               </section>
@@ -544,6 +600,89 @@ export function TimerScreen() {
 
                 <p className="mt-2 text-[11px] sm:text-xs font-bold text-muted-foreground normal-case">
                   空欄なら停止するまで繰り返します
+                </p>
+              </section>
+
+              <section className="rounded-2xl border border-border bg-card/70 p-3 text-center sm:col-span-2">
+                <h2 className="text-base sm:text-lg font-bold tracking-[0.1em] text-muted-foreground">
+                  コース人数
+                  <span className="ml-2 text-xs tracking-normal">
+                    （任意）
+                  </span>
+                </h2>
+
+                <form
+                  onSubmit={commitCourseSwimmers}
+                  className="mt-2 flex flex-col items-center gap-2"
+                >
+                  <div className="flex items-end">
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      min={1}
+                      max={MAX_COURSE_SWIMMERS}
+                      step={1}
+                      value={courseSwimmersInput}
+                      onChange={handleCourseSwimmersInput}
+                      onBlur={commitCourseSwimmers}
+                      placeholder="—"
+                      aria-label="コース人数（任意）"
+                      className="w-20 h-11 bg-transparent text-center text-3xl font-black tabular-nums border-b-4 border-accent placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+                      data-testid="input-course-swimmers"
+                    />
+                    <span className="mb-1 ml-1 text-sm font-bold text-muted-foreground">
+                      人
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1 w-full max-w-[220px]">
+                    {[
+                      {
+                        delta: -5,
+                        label: '5人減らす',
+                        testId: 'button-dec-course-5',
+                      },
+                      {
+                        delta: -1,
+                        label: '1人減らす',
+                        testId: 'button-dec-course',
+                      },
+                      {
+                        delta: 1,
+                        label: '1人増やす',
+                        testId: 'button-inc-course',
+                      },
+                      {
+                        delta: 5,
+                        label: '5人増やす',
+                        testId: 'button-inc-course-5',
+                      },
+                    ].map(({ delta, label, testId }) => (
+                      <button
+                        key={delta}
+                        type="button"
+                        onClick={() => adjustCourse(delta)}
+                        disabled={
+                          delta < 0
+                            ? courseSwimmers === null ||
+                              courseSwimmers < -delta
+                            : (courseSwimmers ?? 0) >
+                              MAX_COURSE_SWIMMERS - delta
+                        }
+                        aria-label={`コース人数を${label}`}
+                        className="h-10 rounded-lg bg-secondary px-1 text-xs font-bold text-accent active:scale-95 transition-all disabled:opacity-35 disabled:pointer-events-none"
+                        data-testid={testId}
+                      >
+                        {delta > 0
+                          ? `＋${delta}人`
+                          : `−${-delta}人`}
+                      </button>
+                    ))}
+                  </div>
+                </form>
+
+                <p className="mt-2 text-[11px] sm:text-xs font-bold text-muted-foreground normal-case">
+                  各本目で設定人数分だけスタート音が鳴ります
                 </p>
               </section>
             </div>
