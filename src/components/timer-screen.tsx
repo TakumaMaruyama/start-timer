@@ -312,7 +312,7 @@ export function TimerScreen() {
     <div className="h-[100dvh] w-full flex flex-col bg-background text-foreground overflow-hidden pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       <header className="timer-header shrink-0 p-4 border-b border-border/50">
         <div className="font-bold tracking-widest text-primary text-xs sm:text-base">
-          SWIM START TIMER
+          スタートタイマー
         </div>
       </header>
 

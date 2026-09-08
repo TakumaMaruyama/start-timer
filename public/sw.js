@@ -1,5 +1,14 @@
-const CACHE_NAME = 'swim-timer-v6';
-const APP_SHELL = ['/', '/index.html', '/manifest.json', '/favicon.svg'];
+const CACHE_NAME = 'swim-timer-v7';
+const APP_SHELL = [
+  '/',
+  '/index.html',
+  '/manifest.json',
+  '/icons/pace-clock.svg',
+  '/icons/pace-clock-180.png',
+  '/icons/pace-clock-192.png',
+  '/icons/pace-clock-512.png',
+  '/icons/pace-clock-maskable-512.png',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

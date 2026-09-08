@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <title>スタートタイマー</title>
+  <defs>
+    <!-- Outlined numerals keep the dial identical without depending on fonts. -->
+    <path id="zero" d="M12 0C4 0 0 6 0 18S4 36 12 36S24 30 24 18S20 0 12 0Z"/>
+    <path id="one" d="M3 8L13 0V36M3 36H23"/>
+    <path id="three" d="M1 3C10-4 24 0 24 9C24 15 19 18 12 18C19 18 25 21 25 28C25 38 9 40 0 33"/>
+    <path id="four" d="M19 36V0L0 25H27"/>
+    <path id="five" d="M24 0H3L1 17C13 12 25 16 25 27C25 38 10 40 0 33"/>
+    <path id="six" d="M23 3C10-5 0 3 0 20C0 31 5 36 13 36C21 36 25 31 25 25C25 18 21 14 13 14C7 14 3 17 0 21"/>
+    <path id="tick" d="M256 74V88"/>
+  </defs>
+  <path fill="#08131E" d="M0 0H512V512H0Z"/>
+  <g id="dial">
+    <circle cx="256" cy="256" r="218" fill="#234056"/>
+    <circle cx="256" cy="256" r="206" fill="#FFFFFF"/>
+    <g stroke="#08131E" stroke-width="8" stroke-linecap="round">
+      <use href="#tick"/>
+      <use href="#tick" transform="rotate(30 256 256)"/>
+      <use href="#tick" transform="rotate(60 256 256)"/>
+      <use href="#tick" transform="rotate(90 256 256)"/>
+      <use href="#tick" transform="rotate(120 256 256)"/>
+      <use href="#tick" transform="rotate(150 256 256)"/>
+      <use href="#tick" transform="rotate(180 256 256)"/>
+      <use href="#tick" transform="rotate(210 256 256)"/>
+      <use href="#tick" transform="rotate(240 256 256)"/>
+      <use href="#tick" transform="rotate(270 256 256)"/>
+      <use href="#tick" transform="rotate(300 256 256)"/>
+      <use href="#tick" transform="rotate(330 256 256)"/>
+    </g>
+    <g stroke="#08131E" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <g transform="translate(226 106)"><use href="#six"/><use href="#zero" x="36"/></g>
+      <g transform="translate(354 238)"><use href="#one"/><use href="#five" x="36"/></g>
+      <g transform="translate(226 370)"><use href="#three"/><use href="#zero" x="36"/></g>
+      <g transform="translate(98 238)"><use href="#four"/><use href="#five" x="36"/></g>
+    </g>
+    <path d="M245 245L351 139L377 135L373 161L267 267Z" fill="#EF3452"/>
+    <path d="M267 267L161 373L135 377L139 351L245 245Z" fill="#087BC1"/>
+    <circle cx="256" cy="256" r="20" fill="#08131E"/>
+    <circle cx="256" cy="256" r="7" fill="#FFFFFF"/>
+  </g>
+</svg>
