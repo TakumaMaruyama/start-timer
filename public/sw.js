@@ -1,8 +1,9 @@
-const CACHE_NAME = 'swim-timer-v7';
+const CACHE_NAME = 'swim-timer-v8';
 const APP_SHELL = [
   '/',
   '/index.html',
   '/manifest.json',
+  '/manifest.json?v=8',
   '/icons/pace-clock.svg',
   '/icons/pace-clock-180.png',
   '/icons/pace-clock-192.png',
@@ -35,9 +36,17 @@ self.addEventListener('fetch', (event) => {
   // Only cache GET requests
   if (event.request.method !== 'GET') return;
 
+  // Installation names must come from the current page and manifest when online.
+  const pathname = new URL(event.request.url).pathname;
+  const preferNetwork = event.request.mode === 'navigate' ||
+    pathname === '/index.html' || pathname === '/manifest.json';
+
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      const fetchPromise = fetch(event.request).then((networkResponse) => {
+      const fetchPromise = fetch(
+        event.request,
+        preferNetwork ? { cache: 'no-store' } : undefined,
+      ).then((networkResponse) => {
         if (networkResponse && networkResponse.ok) {
           const responseClone = networkResponse.clone();
           return caches.open(CACHE_NAME).then((cache) =>
@@ -55,7 +64,7 @@ self.addEventListener('fetch', (event) => {
         }
         return caches.match(event.request);
       });
-      return cachedResponse || fetchPromise;
+      return preferNetwork ? fetchPromise : cachedResponse || fetchPromise;
     })
   );
 });

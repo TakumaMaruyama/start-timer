@@ -116,9 +116,147 @@
   50% { opacity: 0.5; }
 }
 
+.timer-display-header {
+  padding-block: 0.375rem;
+}
+
+.timer-display-main {
+  padding: 0.5rem;
+}
+
+.timer-active-content {
+  --timer-ring-size: min(calc(100vw - 2rem), 50dvh, 42rem);
+  gap: clamp(0.5rem, 1.5dvh, 1.25rem);
+}
+
+.timer-active-content [data-testid='text-progress'] {
+  padding: 0.25rem 0.875rem;
+  font-size: clamp(1rem, 2.8dvh, 1.75rem);
+  text-align: center;
+}
+
+.timer-cycle-ring {
+  width: var(--timer-ring-size);
+}
+
+.timer-cycle-label {
+  font-size: clamp(0.75rem, calc(var(--timer-ring-size) * 0.047), 1.75rem);
+}
+
+.timer-cycle-value {
+  font-size: calc(var(--timer-ring-size) * 0.34);
+}
+
+.timer-cycle-value[data-digits='3'] {
+  font-size: calc(var(--timer-ring-size) * 0.28);
+}
+
+.timer-cycle-value[data-digits='4'] {
+  font-size: calc(var(--timer-ring-size) * 0.22);
+}
+
+.timer-cycle-unit {
+  font-size: calc(var(--timer-ring-size) * 0.065);
+}
+
+.timer-cycle-start {
+  font-size: calc(var(--timer-ring-size) * 0.13);
+}
+
+.timer-next-tone {
+  width: min(100%, 42rem);
+  gap: 0.375rem;
+  padding: 0.625rem 0.75rem;
+}
+
+.timer-next-label {
+  font-size: clamp(1rem, 4.4vw, 1.75rem);
+}
+
+.timer-next-value {
+  font-size: clamp(3rem, 18vw, 8rem);
+}
+
+.timer-main-label {
+  font-size: clamp(1.125rem, 3.6vw, 2.75rem);
+}
+
+.timer-main-value {
+  font-size: clamp(3.5rem, min(28vw, 48dvh), 24rem);
+  white-space: nowrap;
+}
+
+.timer-main-value[data-flash='true'] {
+  font-size: clamp(2rem, min(17vw, 30dvh), 12rem);
+}
+
+.timer-compact-controls {
+  padding: 0.5rem 0.75rem;
+}
+
+.timer-compact-controls > div {
+  max-width: 34rem;
+  gap: 0.75rem;
+}
+
+.timer-compact-controls button {
+  height: 3rem;
+  border-radius: 0.75rem;
+  font-size: 1rem;
+  letter-spacing: normal;
+  gap: 0.5rem;
+}
+
+.timer-compact-controls button svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+@media (orientation: landscape) {
+  .timer-with-cycle {
+    --timer-ring-size: min(45vw, calc(100dvh - 13rem), 42rem);
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    justify-items: center;
+    column-gap: 1rem;
+  }
+
+  .timer-with-cycle [data-testid='text-progress'] {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .timer-cycle-only {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .timer-with-cycle .timer-cycle-ring {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .timer-next-tone {
+    grid-column: 2;
+    grid-row: 2;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  .timer-next-label {
+    font-size: clamp(1rem, 2.5vw, 2rem);
+  }
+
+  .timer-next-value {
+    font-size: min(16vw, 28dvh, 18rem);
+  }
+}
+
 @media (orientation: landscape) and (max-height: 500px) {
   .timer-header {
-    padding-block: 0.5rem;
+    padding-block: 0.375rem;
   }
 
   .timer-display-main {
@@ -126,22 +264,14 @@
     padding-block: 0.25rem;
   }
 
-  .timer-active-content {
-    gap: 0.25rem;
-    padding-block: 0;
+  .timer-with-cycle {
+    --timer-ring-size: min(43vw, calc(100dvh - 6.5rem));
+    gap: 0.25rem 0.75rem;
   }
 
   .timer-active-content [data-testid='text-progress'] {
     padding: 0.25rem 0.75rem;
     font-size: 1rem;
-  }
-
-  .timer-cycle-ring {
-    width: clamp(7rem, 38vh, 9.5rem);
-  }
-
-  .timer-next-tone {
-    padding-block: 0.375rem;
   }
 
   .timer-complete {

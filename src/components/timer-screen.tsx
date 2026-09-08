@@ -310,7 +310,7 @@ export function TimerScreen() {
 
   return (
     <div className="h-[100dvh] w-full flex flex-col bg-background text-foreground overflow-hidden pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
-      <header className="timer-header shrink-0 p-4 border-b border-border/50">
+      <header className={`timer-header shrink-0 p-4 border-b border-border/50 ${state === 'IDLE' ? '' : 'timer-display-header'}`}>
         <div className="font-bold tracking-widest text-primary text-xs sm:text-base">
           スタートタイマー
         </div>
@@ -690,7 +690,7 @@ export function TimerScreen() {
         )}
 
         {isTimerActive && (
-          <div className="timer-active-content relative flex flex-col items-center justify-center w-full h-full min-h-0 gap-1 sm:gap-3 py-1">
+          <div className={`timer-active-content relative flex flex-col items-center justify-center w-full h-full min-h-0 ${showPracticeCycleCountdown ? 'timer-with-cycle' : ''} ${waitingForCompletion ? 'timer-cycle-only' : ''}`}>
             {totalStrokes !== null && (
               <div
                 className={`rounded-full border px-4 py-1.5 text-base sm:text-2xl font-black ${
@@ -710,7 +710,7 @@ export function TimerScreen() {
             {showPracticeCycleCountdown ? (
               <>
                 <div
-                  className={`timer-cycle-ring relative aspect-square w-[clamp(8.5rem,25vh,14rem)] shrink-0 ${practiceCycleCountdownColor}`}
+                  className={`timer-cycle-ring relative aspect-square shrink-0 ${practiceCycleCountdownColor}`}
                   role="progressbar"
                   aria-label={`${practiceCycleCountdownLabel}、あと${practiceCycleRemainingSeconds}秒`}
                   aria-valuemin={0}
@@ -747,23 +747,23 @@ export function TimerScreen() {
                     />
                   </svg>
                   <div className="absolute inset-0 flex flex-col items-center justify-center px-3 text-center">
-                    <div className="text-[10px] min-[380px]:text-xs sm:text-base font-bold tracking-wide text-muted-foreground normal-case">
+                    <div className="timer-cycle-label font-bold tracking-wide text-muted-foreground normal-case">
                       {practiceCycleCountdownLabel}
                     </div>
                     <div className="mt-0.5 flex items-baseline justify-center gap-1 leading-none">
                       {startFlash ? (
                         <span
-                          className="whitespace-nowrap text-[clamp(1rem,3vh,2.25rem)] font-black tracking-tight text-primary animate-pulse-fast"
+                          className="timer-cycle-start whitespace-nowrap font-black tracking-tight text-primary animate-pulse-fast"
                           aria-live="assertive"
                         >
                           スタート！
                         </span>
                       ) : (
                         <>
-                          <span className="text-[clamp(2.75rem,8vh,5.5rem)] font-black tabular-nums tracking-tighter">
+                          <span className="timer-cycle-value font-black tabular-nums tracking-tighter" data-digits={String(practiceCycleRemainingSeconds).length}>
                             {practiceCycleRemainingSeconds}
                           </span>
-                          <span className="text-sm sm:text-xl font-black">
+                          <span className="timer-cycle-unit font-black">
                             秒
                           </span>
                         </>
@@ -778,12 +778,12 @@ export function TimerScreen() {
                 </div>
 
                 {!waitingForCompletion && (
-                  <div className="timer-next-tone flex flex-col items-center justify-center gap-0.5 rounded-2xl border-2 border-border bg-card/80 px-5 py-2 text-muted-foreground shadow-lg min-[480px]:flex-row min-[480px]:gap-4 min-[480px]:rounded-full min-[480px]:px-6">
-                    <span className="text-sm min-[380px]:text-base sm:text-xl font-bold tracking-wide whitespace-nowrap">
+                  <div className="timer-next-tone flex flex-col items-center justify-center rounded-2xl border-2 border-border bg-card/80 text-muted-foreground shadow-lg">
+                    <span className="timer-next-label font-bold tracking-wide whitespace-nowrap">
                       次のスタート音まで
                     </span>
                     <span
-                      className={`text-4xl sm:text-5xl font-black leading-none tabular-nums tracking-tighter ${
+                      className={`timer-next-value font-black leading-none tabular-nums tracking-tighter ${
                         state === 'PAUSED'
                           ? 'text-muted-foreground'
                           : countdown > 0
@@ -798,14 +798,14 @@ export function TimerScreen() {
               </>
             ) : (
               <>
-                <div className="text-lg sm:text-3xl font-bold text-muted-foreground tracking-[0.15em] sm:tracking-[0.25em] mb-1 sm:mb-3">
+                <div className="timer-main-label font-bold text-muted-foreground tracking-[0.15em] mb-1">
                   {waitingForCompletion
                     ? '練習完了まで'
                     : '次のスタートまで'}
                 </div>
 
                 <div
-                  className={`text-[3.75rem] min-[380px]:text-[5rem] sm:text-[8rem] md:text-[12rem] font-black leading-none tabular-nums tracking-tighter transition-colors duration-200 drop-shadow-xl ${
+                  className={`timer-main-value font-black leading-none tabular-nums tracking-tighter transition-colors duration-200 drop-shadow-xl ${
                     state === 'PAUSED'
                       ? 'text-muted-foreground'
                       : startFlash
@@ -815,6 +815,7 @@ export function TimerScreen() {
                         : 'text-primary'
                   }`}
                   aria-live={startFlash ? 'assertive' : 'polite'}
+                  data-flash={startFlash}
                 >
                   {startFlash ? 'スタート！' : formatRemaining(remainingMs)}
                 </div>
@@ -844,7 +845,7 @@ export function TimerScreen() {
 
       <footer
         className={`shrink-0 p-4 sm:p-6 pb-6 sm:pb-12 bg-background/80 backdrop-blur-md border-t border-border/50 relative z-20 ${
-          state === 'IDLE' ? '' : 'timer-landscape-hidden-controls'
+          state === 'IDLE' ? '' : 'timer-compact-controls timer-landscape-hidden-controls'
         }`}
       >
         <div className="max-w-2xl mx-auto flex justify-center gap-3 sm:gap-8">
