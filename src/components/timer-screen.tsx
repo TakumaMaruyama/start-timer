@@ -1,8 +1,10 @@
 import {
   useEffect,
+  useRef,
   useState,
   type ChangeEvent,
   type FormEvent,
+  type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
   ArrowLeft,
@@ -40,6 +42,11 @@ export function TimerScreen() {
   const {
     intervalSec,
     changeInterval,
+    initialCountdownSec,
+    changeInitialCountdown,
+    operationLocked,
+    lockOperations,
+    startError,
     cycleMinutes,
     cycleSeconds,
     practiceCycleSeconds,
@@ -64,6 +71,10 @@ export function TimerScreen() {
   } = useTimer(10);
 
   const [intervalInput, setIntervalInput] = useState(intervalSec.toString());
+  const [initialCountdownInput, setInitialCountdownInput] = useState(initialCountdownSec.toString());
+  const [unlockProgress, setUnlockProgress] = useState(0);
+  const unlockPressRef = useRef<{ pointerId: number; startedAt: number; element: HTMLButtonElement } | null>(null);
+  const unlockKeyRef = useRef<{ key: string; startedAt: number } | null>(null);
   const [cycleMinutesInput, setCycleMinutesInput] = useState('');
   const [cycleSecondsInput, setCycleSecondsInput] = useState('');
   const [totalInput, setTotalInput] = useState('');
@@ -72,6 +83,76 @@ export function TimerScreen() {
   useEffect(() => {
     setIntervalInput(intervalSec.toString());
   }, [intervalSec]);
+
+  const countdownInputValid = /^(?:[1-9]|[1-5][0-9]|60)$/.test(initialCountdownInput);
+  const integerInputValid = (value: string, min: number, max: number, optional = false) =>
+    (optional && value === '') || (/^\d+$/.test(value) && Number(value) >= min && Number(value) <= max);
+  const settingsInputsValid =
+    integerInputValid(intervalInput, 5, 120) &&
+    integerInputValid(cycleMinutesInput, 0, 99, true) &&
+    integerInputValid(cycleSecondsInput, 0, 59, true) &&
+    integerInputValid(totalInput, 1, 99, true) &&
+    integerInputValid(courseSwimmersInput, 1, MAX_COURSE_SWIMMERS, true);
+
+  useEffect(() => {
+    if (!operationLocked) {
+      unlockPressRef.current = null;
+      unlockKeyRef.current = null;
+      setUnlockProgress(0);
+      return;
+    }
+    const progressTimer = window.setInterval(() => {
+      const startedAt = unlockPressRef.current?.startedAt ?? unlockKeyRef.current?.startedAt;
+      if (startedAt !== undefined) setUnlockProgress(Math.min(1, (performance.now() - startedAt) / 2000));
+    }, 40);
+    const cancel = () => {
+      unlockPressRef.current = null;
+      unlockKeyRef.current = null;
+      setUnlockProgress(0);
+    };
+    const onAnotherPointer = (event: PointerEvent) => {
+      if (unlockPressRef.current && event.pointerId !== unlockPressRef.current.pointerId) cancel();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') cancel();
+    };
+    window.addEventListener('pointerdown', onAnotherPointer, true);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(progressTimer);
+      window.removeEventListener('pointerdown', onAnotherPointer, true);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [operationLocked]);
+
+  const cancelUnlock = () => {
+    unlockPressRef.current = null;
+    unlockKeyRef.current = null;
+    setUnlockProgress(0);
+  };
+
+  const startUnlock = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!operationLocked || unlockPressRef.current || unlockKeyRef.current || !event.isPrimary || event.button !== 0) return;
+    unlockPressRef.current = { pointerId: event.pointerId, startedAt: performance.now(), element: event.currentTarget };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const moveUnlock = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const press = unlockPressRef.current;
+    if (!press || press.pointerId !== event.pointerId) return;
+    const bounds = press.element.getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) cancelUnlock();
+  };
+
+  const endUnlock = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const press = unlockPressRef.current;
+    if (!press || press.pointerId !== event.pointerId) return;
+    const bounds = press.element.getBoundingClientRect();
+    const inside = event.clientX >= bounds.left && event.clientX <= bounds.right && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+    const completed = inside && performance.now() - press.startedAt >= 2000;
+    cancelUnlock();
+    if (completed) lockOperations(false);
+  };
 
   useEffect(() => {
     setCycleMinutesInput(cycleMinutes?.toString() ?? '');
@@ -310,10 +391,54 @@ export function TimerScreen() {
 
   return (
     <div className="h-[100dvh] w-full flex flex-col bg-background text-foreground overflow-hidden pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
-      <header className={`timer-header shrink-0 p-4 border-b border-border/50 ${state === 'IDLE' ? '' : 'timer-display-header'}`}>
+      <header className={`timer-header shrink-0 p-4 border-b border-border/50 flex items-center justify-between gap-2 ${state === 'IDLE' ? '' : 'timer-display-header'}`}>
         <div className="font-bold tracking-widest text-primary text-xs sm:text-base">
           スタートタイマー
         </div>
+        {state !== 'IDLE' && (
+          operationLocked ? (
+            <button
+              key="locked"
+              type="button"
+              onPointerDown={startUnlock}
+              onPointerMove={moveUnlock}
+              onPointerUp={endUnlock}
+              onPointerCancel={cancelUnlock}
+              onLostPointerCapture={cancelUnlock}
+              onKeyDown={(event) => {
+                if (event.key !== ' ' && event.key !== 'Enter') return;
+                event.preventDefault();
+                if (event.repeat || unlockKeyRef.current || unlockPressRef.current) return;
+                unlockKeyRef.current = { key: event.key, startedAt: performance.now() };
+              }}
+              onKeyUp={(event) => {
+                if (event.key !== ' ' && event.key !== 'Enter') return;
+                event.preventDefault();
+                const press = unlockKeyRef.current;
+                const completed = press?.key === event.key && performance.now() - press.startedAt >= 2000;
+                cancelUnlock();
+                if (completed) lockOperations(false);
+              }}
+              onBlur={cancelUnlock}
+              className="timer-lock-button relative overflow-hidden rounded-xl border border-accent px-3 py-2 text-xs sm:text-sm font-bold text-accent touch-none"
+              data-testid="button-unlock"
+              aria-label="操作ロック中。2秒長押しして指を離すと解除"
+            >
+              <span className="absolute inset-y-0 left-0 bg-accent/25" style={{ width: `${unlockProgress * 100}%` }} aria-hidden="true" />
+              <span className="relative">操作ロック中 · 2秒長押しで解除</span>
+            </button>
+          ) : (
+            <button
+              key="unlocked"
+              type="button"
+              onClick={() => lockOperations(true)}
+              className="rounded-xl border border-accent px-3 py-2 text-xs sm:text-sm font-bold text-accent"
+              data-testid="button-relock"
+            >
+              再ロック
+            </button>
+          )
+        )}
       </header>
 
       <main
@@ -351,7 +476,11 @@ export function TimerScreen() {
                   max={120}
                   step={1}
                   value={intervalInput}
-                  onChange={(event) => setIntervalInput(event.target.value)}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setIntervalInput(value);
+                    if (integerInputValid(value, 5, 120)) changeInterval(Number(value));
+                  }}
                   onBlur={commitInterval}
                   aria-label="スタート音の間隔（秒）"
                   className="w-24 sm:w-28 h-14 sm:h-16 bg-transparent text-center text-4xl sm:text-5xl font-black tabular-nums border-b-4 border-primary focus:outline-none focus:border-accent transition-colors"
@@ -390,6 +519,30 @@ export function TimerScreen() {
                 </button>
               ))}
             </div>
+
+            <section className="w-full rounded-2xl border border-border bg-card/70 p-3 text-center">
+              <label htmlFor="initial-countdown" className="block text-base sm:text-lg font-bold text-muted-foreground">開始前のカウントダウン（秒）</label>
+              <input
+                id="initial-countdown"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={60}
+                step={1}
+                value={initialCountdownInput}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setInitialCountdownInput(value);
+                  if (/^(?:[1-9]|[1-5][0-9]|60)$/.test(value)) changeInitialCountdown(Number(value));
+                }}
+                aria-invalid={!countdownInputValid}
+                aria-describedby={!countdownInputValid ? 'initial-countdown-error' : undefined}
+                className="mt-2 w-24 h-12 bg-transparent text-center text-3xl font-black tabular-nums border-b-4 border-primary focus:outline-none focus:border-accent"
+                data-testid="input-initial-countdown"
+              />
+              {!countdownInputValid && <p id="initial-countdown-error" className="mt-2 text-sm font-bold text-destructive normal-case">1～60の整数を入力してください</p>}
+              {startError && <p role="alert" className="mt-2 text-sm font-bold text-destructive normal-case" data-testid="text-start-error">{startError}</p>}
+            </section>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
               <section
@@ -693,7 +846,7 @@ export function TimerScreen() {
           <div className={`timer-active-content relative flex flex-col items-center justify-center w-full h-full min-h-0 ${showPracticeCycleCountdown ? 'timer-with-cycle' : ''} ${waitingForCompletion ? 'timer-cycle-only' : ''}`}>
             {totalStrokes !== null && (
               <div
-                className={`rounded-full border px-4 py-1.5 text-base sm:text-2xl font-black ${
+                className={`timer-progress font-black ${
                   startFlash
                     ? 'border-primary bg-primary/15 text-primary'
                     : 'border-accent/60 bg-accent/10 text-accent'
@@ -701,9 +854,9 @@ export function TimerScreen() {
                 aria-live="polite"
                 data-testid="text-progress"
               >
-                {state === 'COUNTDOWN'
-                  ? `次は 全${totalStrokes}本中 1本目`
-                  : `全${totalStrokes}本中 ${currentCycleNumber}本目`}
+                <span className="timer-progress-caption">{state === 'COUNTDOWN' ? '次は' : '現在'}</span>
+                <span className="timer-progress-main"><span className="timer-progress-number">{state === 'COUNTDOWN' ? 1 : currentCycleNumber}</span><span className="timer-progress-unit">本目</span></span>
+                <span className="timer-progress-total">全{totalStrokes}本</span>
               </div>
             )}
 
@@ -845,14 +998,19 @@ export function TimerScreen() {
 
       <footer
         className={`shrink-0 p-4 sm:p-6 pb-6 sm:pb-12 bg-background/80 backdrop-blur-md border-t border-border/50 relative z-20 ${
-          state === 'IDLE' ? '' : 'timer-compact-controls timer-landscape-hidden-controls'
+          state === 'IDLE' ? '' : 'timer-compact-controls'
         }`}
       >
         <div className="max-w-2xl mx-auto flex justify-center gap-3 sm:gap-8">
           {state === 'IDLE' && (
             <button
-              onClick={() => void start()}
-              disabled={!canStart}
+              onPointerDown={(event) => {
+                if (event.isPrimary && event.button === 0) void start(performance.now(), event.pointerId);
+              }}
+              onClick={(event) => {
+                if (event.detail === 0) void start(performance.now());
+              }}
+              disabled={!canStart || !countdownInputValid || !settingsInputsValid}
               className="flex-1 max-w-sm h-20 sm:h-28 bg-primary text-primary-foreground text-3xl sm:text-4xl font-black tracking-widest rounded-2xl flex items-center justify-center gap-3 sm:gap-4 hover:brightness-110 active:scale-95 transition-all shadow-[0_0_30px_rgba(0,240,255,0.3)] disabled:opacity-35 disabled:shadow-none disabled:pointer-events-none"
               data-testid="button-start"
             >
@@ -861,7 +1019,7 @@ export function TimerScreen() {
             </button>
           )}
 
-          {state === 'COMPLETE' && (
+          {state === 'COMPLETE' && !operationLocked && (
             <button
               onClick={reset}
               className="flex-1 max-w-sm h-20 sm:h-28 bg-primary text-primary-foreground text-xl sm:text-3xl font-black tracking-wide rounded-2xl flex items-center justify-center gap-3 hover:brightness-110 active:scale-95 transition-all shadow-[0_0_30px_rgba(0,240,255,0.3)]"
@@ -872,7 +1030,7 @@ export function TimerScreen() {
             </button>
           )}
 
-          {state !== 'IDLE' && state !== 'COMPLETE' && (
+          {state !== 'IDLE' && state !== 'COMPLETE' && !operationLocked && (
             <>
               {state === 'RUNNING' && (
                 <button

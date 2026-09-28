@@ -7,7 +7,6 @@ import {
   scheduleStartToneAt,
 } from '@/lib/audio';
 import {
-  INITIAL_START_COUNTDOWN_MS,
   isValidCourseSwimmers,
   isValidPracticeCycleSeconds,
   isValidTotalStrokes,
@@ -30,11 +29,15 @@ const PREVIEW_STEPS = [
 ] as const;
 const NEXT_START_EPSILON_MS = 0.01;
 const UNLIMITED_SCHEDULE_BATCH_SIZE = 12;
+const AUDIO_SCHEDULE_LEAD_MS = 25;
 
 export function useTimer(initialInterval = 10) {
   const wakeLockSupported =
     typeof navigator !== 'undefined' && 'wakeLock' in navigator;
   const [intervalSec, setIntervalSec] = useState(initialInterval);
+  const [initialCountdownSec, setInitialCountdownSec] = useState(10);
+  const [operationLocked, setOperationLocked] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   const [cycleMinutes, setCycleMinutes] = useState<number | null>(null);
   const [cycleSeconds, setCycleSeconds] = useState<number | null>(null);
   const [totalStrokes, setTotalStrokes] = useState<number | null>(null);
@@ -62,6 +65,8 @@ export function useTimer(initialInterval = 10) {
 
   const stateRef = useRef(state);
   const intervalRef = useRef(intervalSec);
+  const initialCountdownRef = useRef(initialCountdownSec);
+  const operationLockedRef = useRef(false);
   const practiceCycleSecondsRef = useRef<number | null>(
     practiceCycleSeconds,
   );
@@ -87,6 +92,12 @@ export function useTimer(initialInterval = 10) {
   const startFlashTimerRef = useRef<number | null>(null);
   const rafId = useRef<number | null>(null);
   const wakeLockRef = useRef<any>(null);
+  const releaseAudioCleanupRef = useRef<(() => void) | null>(null);
+
+  const lockOperations = useCallback((locked: boolean) => {
+    operationLockedRef.current = locked;
+    setOperationLocked(locked);
+  }, []);
 
   useEffect(() => {
     stateRef.current = state;
@@ -156,6 +167,7 @@ export function useTimer(initialInterval = 10) {
   }, []);
 
   const finishPractice = useCallback(() => {
+    releaseAudioCleanupRef.current?.();
     commandGenerationRef.current += 1;
     startPendingRef.current = false;
     resumePendingRef.current = false;
@@ -176,6 +188,27 @@ export function useTimer(initialInterval = 10) {
     setState('COMPLETE');
     void releaseWakeLock();
   }, [releaseWakeLock]);
+
+  const abortStart = useCallback((message: string) => {
+    releaseAudioCleanupRef.current?.();
+    commandGenerationRef.current += 1;
+    startPendingRef.current = false;
+    resyncPendingRef.current = false;
+    cancelScheduledTones();
+    scheduledThroughRef.current = 0;
+    stateRef.current = 'IDLE';
+    setState('IDLE');
+    setRemainingMs(0);
+    setCountdown(0);
+    setCurrentCycleNumber(0);
+    setPracticeCycleRemainingMs(null);
+    setWaitingForCompletion(false);
+    currentCycleNumberRef.current = 0;
+    waitingForCompletionRef.current = false;
+    lockOperations(false);
+    setStartError(message);
+    void releaseWakeLock();
+  }, [lockOperations, releaseWakeLock]);
 
   const scheduleToneAtPerformanceTime = useCallback(
     (
@@ -265,22 +298,26 @@ export function useTimer(initialInterval = 10) {
 
   const scheduleInitialAudio = useCallback(
     (countdownStartPerformanceMs: number) => {
+      const firstStartAt = firstStartAtRef.current;
+      const context = getAudioContext();
+      const now = performance.now();
+      if (
+        !context || context.state !== 'running' ||
+        firstStartAt - now < AUDIO_SCHEDULE_LEAD_MS
+      ) return false;
+
       PREVIEW_STEPS.forEach(({ offsetMs }) => {
-        scheduleToneAtPerformanceTime(
-          countdownStartPerformanceMs +
-            (INITIAL_START_COUNTDOWN_MS - offsetMs),
-          (audioTime) => {
-            schedulePreviewToneAt(audioTime);
-          },
-        );
+        const target = firstStartAt - offsetMs;
+        if (target >= countdownStartPerformanceMs) {
+          scheduleToneAtPerformanceTime(target, schedulePreviewToneAt);
+        }
       });
-      scheduleToneAtPerformanceTime(
-        countdownStartPerformanceMs + INITIAL_START_COUNTDOWN_MS,
-        (audioTime) => {
-          scheduleStartToneAt(audioTime);
-        },
+      const startTone = scheduleStartToneAt(
+        context.currentTime + (firstStartAt - performance.now()) / 1000,
       );
+      if (!startTone) return false;
       scheduleUpcomingAudio(nextStartAtRef.current);
+      return true;
     },
     [scheduleToneAtPerformanceTime, scheduleUpcomingAudio],
   );
@@ -332,6 +369,7 @@ export function useTimer(initialInterval = 10) {
   const resyncAudioAfterVisibility = useCallback(async () => {
     const currentState = stateRef.current;
     if (currentState !== 'RUNNING' && currentState !== 'COUNTDOWN') return;
+    if (currentState === 'COUNTDOWN' && startPendingRef.current) return;
     if (resyncPendingRef.current) return;
 
     const context = getAudioContext();
@@ -346,6 +384,9 @@ export function useTimer(initialInterval = 10) {
     } catch {
       if (generation === commandGenerationRef.current) {
         resyncPendingRef.current = false;
+        if (stateRef.current === 'COUNTDOWN') {
+          abortStart('音声を準備できなかったため、開始を中止しました。もう一度スタートしてください。');
+        }
       }
       return;
     }
@@ -365,53 +406,11 @@ export function useTimer(initialInterval = 10) {
     const now = performance.now();
 
     if (stateRef.current === 'COUNTDOWN') {
-      const expectedFirstStartAt =
-        countdownStartRef.current + INITIAL_START_COUNTDOWN_MS;
-      if (now < expectedFirstStartAt) {
-        scheduleInitialAudio(countdownStartRef.current);
+      const expectedFirstStartAt = firstStartAtRef.current;
+      if (now < expectedFirstStartAt && scheduleInitialAudio(countdownStartRef.current)) {
         return;
       }
-
-      firstStartAtRef.current = expectedFirstStartAt;
-      const cycleDurationSeconds = practiceCycleSecondsRef.current;
-      const total = totalStrokesRef.current;
-      completionAtRef.current =
-        total !== null &&
-        cycleDurationSeconds !== null &&
-        isValidPracticeCycleSeconds(cycleDurationSeconds)
-          ? expectedFirstStartAt + total * cycleDurationSeconds * 1000
-          : Number.POSITIVE_INFINITY;
-
-      if (now >= completionAtRef.current) {
-        finishPractice();
-        return;
-      }
-
-      // The first scheduled tone could not play while audio was suspended.
-      // Replace that missed tone once on return without moving the absolute
-      // practice-cycle grid, then continue from the next allowed grid point.
-      scheduleToneAtPerformanceTime(now, (audioTime) => {
-        scheduleStartToneAt(audioTime);
-      });
-      updatePracticeCycleProgress(now);
-      const nextStartAt = nextAllowedStartAt(
-        now + NEXT_START_EPSILON_MS,
-      );
-      nextStartAtRef.current =
-        nextStartAt ?? completionAtRef.current;
-      setRemainingMs(
-        Math.max(0, nextStartAtRef.current - now),
-      );
-      setCountdown(0);
-      stateRef.current = 'RUNNING';
-      setState('RUNNING');
-      flashStart();
-
-      if (nextStartAt !== null) {
-        scheduleUpcomingAudio(nextStartAtRef.current);
-      } else {
-        enterCompletionWait(now);
-      }
+      abortStart('最初の合図に音声が間に合わなかったため、開始を中止しました。');
       return;
     }
 
@@ -441,6 +440,7 @@ export function useTimer(initialInterval = 10) {
       enterCompletionWait(now);
     }
   }, [
+    abortStart,
     enterCompletionWait,
     finishPractice,
     flashStart,
@@ -482,14 +482,19 @@ export function useTimer(initialInterval = 10) {
       const elapsed = now - countdownStartRef.current;
       const countdownRemaining = Math.max(
         0,
-        INITIAL_START_COUNTDOWN_MS - elapsed,
+        initialCountdownRef.current * 1000 - elapsed,
       );
       setRemainingMs(countdownRemaining);
       setCountdown(
         countdownRemaining > 0 ? Math.ceil(countdownRemaining / 1000) : 0,
       );
 
-      if (elapsed >= INITIAL_START_COUNTDOWN_MS) {
+      if (now >= firstStartAtRef.current) {
+        if (startPendingRef.current || resyncPendingRef.current || getAudioContext()?.state !== 'running') {
+          abortStart('最初の合図に音声が間に合わなかったため、開始を中止しました。');
+          rafId.current = requestAnimationFrame(loop);
+          return;
+        }
         currentCycleNumberRef.current = 1;
         setCurrentCycleNumber(1);
         updatePracticeCycleProgress(now);
@@ -558,6 +563,7 @@ export function useTimer(initialInterval = 10) {
 
     rafId.current = requestAnimationFrame(loop);
   }, [
+    abortStart,
     enterCompletionWait,
     finishPractice,
     flashStart,
@@ -571,6 +577,7 @@ export function useTimer(initialInterval = 10) {
     rafId.current = requestAnimationFrame(loop);
     return () => {
       commandGenerationRef.current += 1;
+      releaseAudioCleanupRef.current?.();
       startPendingRef.current = false;
       resumePendingRef.current = false;
       resyncPendingRef.current = false;
@@ -584,10 +591,13 @@ export function useTimer(initialInterval = 10) {
     };
   }, [loop, releaseWakeLock]);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (pressedAt = performance.now(), pointerId?: number) => {
     if (
       stateRef.current !== 'IDLE' ||
       startPendingRef.current ||
+      !Number.isInteger(initialCountdownRef.current) ||
+      initialCountdownRef.current < 1 ||
+      initialCountdownRef.current > 60 ||
       ((totalStrokesRef.current !== null ||
         courseSwimmersRef.current !== null) &&
         !isValidPracticeCycleSeconds(
@@ -602,36 +612,15 @@ export function useTimer(initialInterval = 10) {
     commandGenerationRef.current = generation;
     cancelScheduledTones();
     scheduledThroughRef.current = 0;
-    try {
-      await ensureAudioRunning();
-    } catch {
-      if (generation === commandGenerationRef.current) {
-        startPendingRef.current = false;
-      }
-      return;
-    }
-
-    if (
-      generation !== commandGenerationRef.current ||
-      stateRef.current !== 'IDLE'
-    ) {
-      if (generation === commandGenerationRef.current) {
-        startPendingRef.current = false;
-      }
-      return;
-    }
-    startPendingRef.current = false;
-
-    const countdownStart = performance.now();
-    const firstStartAt = countdownStart + INITIAL_START_COUNTDOWN_MS;
+    const countdownStart = pressedAt;
+    const firstStartAt = countdownStart + initialCountdownRef.current * 1000;
     const cycleDurationSeconds = practiceCycleSecondsRef.current;
     const total = totalStrokesRef.current;
 
     countdownStartRef.current = countdownStart;
     firstStartAtRef.current = firstStartAt;
     completionAtRef.current =
-      total !== null &&
-      cycleDurationSeconds !== null &&
+      total !== null && cycleDurationSeconds !== null &&
       isValidPracticeCycleSeconds(cycleDurationSeconds)
         ? firstStartAt + total * cycleDurationSeconds * 1000
         : Number.POSITIVE_INFINITY;
@@ -643,16 +632,86 @@ export function useTimer(initialInterval = 10) {
     setCurrentCycleNumber(0);
     setPracticeCycleRemainingMs(null);
     setWaitingForCompletion(false);
-    setRemainingMs(INITIAL_START_COUNTDOWN_MS);
-    setCountdown(INITIAL_START_COUNTDOWN_MS / 1000);
+    setRemainingMs(Math.max(0, firstStartAt - performance.now()));
+    setCountdown(Math.ceil(Math.max(0, firstStartAt - performance.now()) / 1000));
+    setStartError(null);
+    lockOperations(true);
     stateRef.current = 'COUNTDOWN';
     setState('COUNTDOWN');
     void requestWakeLock();
-    scheduleInitialAudio(countdownStart);
-  }, [nextAllowedStartAt, requestWakeLock, scheduleInitialAudio]);
+
+    let releaseAudio: Promise<boolean> | null = null;
+    if (pointerId !== undefined) {
+      releaseAudio = new Promise<boolean>((resolve) => {
+        const cleanup = () => {
+          window.removeEventListener('pointerup', onUp, true);
+          window.removeEventListener('pointercancel', onCancel, true);
+          releaseAudioCleanupRef.current = null;
+        };
+        const onUp = (event: PointerEvent) => {
+          if (event.pointerId !== pointerId) return;
+          cleanup();
+          if (generation === commandGenerationRef.current) {
+            void ensureAudioRunning().catch(() => {});
+          }
+          resolve(true);
+        };
+        const onCancel = (event: PointerEvent) => {
+          if (event.pointerId !== pointerId) return;
+          cleanup();
+          resolve(false);
+        };
+        releaseAudioCleanupRef.current = cleanup;
+        window.addEventListener('pointerup', onUp, true);
+        window.addEventListener('pointercancel', onCancel, true);
+      });
+    }
+
+    try {
+      await ensureAudioRunning();
+    } catch {
+      if (releaseAudio && generation === commandGenerationRef.current) {
+        if (await releaseAudio) {
+          try {
+            await ensureAudioRunning();
+          } catch {
+            if (generation === commandGenerationRef.current) {
+              abortStart('音声を準備できなかったため、開始を中止しました。');
+            }
+            return;
+          }
+        } else {
+          if (generation === commandGenerationRef.current) {
+            abortStart('音声を準備できなかったため、開始を中止しました。');
+          }
+          return;
+        }
+      } else {
+        if (generation === commandGenerationRef.current) {
+          abortStart('音声を準備できなかったため、開始を中止しました。');
+        }
+        return;
+      }
+    }
+
+    if (
+      generation !== commandGenerationRef.current ||
+      stateRef.current !== 'COUNTDOWN'
+    ) {
+      if (generation === commandGenerationRef.current) {
+        startPendingRef.current = false;
+      }
+      return;
+    }
+    if (!scheduleInitialAudio(countdownStart)) {
+      abortStart('最初の合図に音声が間に合わなかったため、開始を中止しました。');
+      return;
+    }
+    startPendingRef.current = false;
+  }, [abortStart, lockOperations, nextAllowedStartAt, requestWakeLock, scheduleInitialAudio]);
 
   const pause = useCallback(() => {
-    if (stateRef.current !== 'RUNNING') return;
+    if (stateRef.current !== 'RUNNING' || operationLockedRef.current) return;
     commandGenerationRef.current += 1;
     resyncPendingRef.current = false;
     const now = performance.now();
@@ -682,7 +741,7 @@ export function useTimer(initialInterval = 10) {
   }, [releaseWakeLock, updatePracticeCycleProgress]);
 
   const resume = useCallback(async () => {
-    if (stateRef.current !== 'PAUSED' || resumePendingRef.current) return;
+    if (stateRef.current !== 'PAUSED' || operationLockedRef.current || resumePendingRef.current) return;
     resumePendingRef.current = true;
     const generation = commandGenerationRef.current + 1;
     commandGenerationRef.current = generation;
@@ -729,6 +788,7 @@ export function useTimer(initialInterval = 10) {
     );
     stateRef.current = 'RUNNING';
     setState('RUNNING');
+    lockOperations(true);
     void requestWakeLock();
 
     if (!pausedWaitingForCompletionRef.current) {
@@ -736,11 +796,14 @@ export function useTimer(initialInterval = 10) {
     }
   }, [
     requestWakeLock,
+    lockOperations,
     scheduleUpcomingAudio,
     updatePracticeCycleProgress,
   ]);
 
   const reset = useCallback(() => {
+    if (operationLockedRef.current) return;
+    releaseAudioCleanupRef.current?.();
     commandGenerationRef.current += 1;
     startPendingRef.current = false;
     resumePendingRef.current = false;
@@ -753,6 +816,7 @@ export function useTimer(initialInterval = 10) {
     }
     stateRef.current = 'IDLE';
     setState('IDLE');
+    setStartError(null);
     setRemainingMs(0);
     setCountdown(0);
     setCurrentCycleNumber(0);
@@ -770,6 +834,14 @@ export function useTimer(initialInterval = 10) {
     pausedWaitingForCompletionRef.current = false;
     void releaseWakeLock();
   }, [releaseWakeLock]);
+
+  const changeInitialCountdown = useCallback((value: number) => {
+    if (stateRef.current !== 'IDLE') return;
+    if (Number.isInteger(value) && value >= 1 && value <= 60) {
+      initialCountdownRef.current = value;
+      setInitialCountdownSec(value);
+    }
+  }, []);
 
   const changeInterval = useCallback((value: number) => {
     if (Number.isInteger(value) && value >= 5 && value <= 120) {
@@ -813,6 +885,11 @@ export function useTimer(initialInterval = 10) {
   return {
     intervalSec,
     changeInterval,
+    initialCountdownSec,
+    changeInitialCountdown,
+    operationLocked,
+    lockOperations,
+    startError,
     cycleMinutes,
     cycleSeconds,
     practiceCycleSeconds,
