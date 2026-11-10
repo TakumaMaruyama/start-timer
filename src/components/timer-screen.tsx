@@ -14,7 +14,7 @@ import {
   Plus,
   Square,
 } from 'lucide-react';
-import { useTimer } from '@/hooks/use-timer';
+import { isValidInitialCountdown, MAX_INITIAL_COUNTDOWN_SECONDS, useTimer } from '@/hooks/use-timer';
 import {
   adjustPracticeCycleSeconds,
   MAX_PRACTICE_CYCLE_SECONDS,
@@ -47,6 +47,8 @@ export function TimerScreen() {
     operationLocked,
     lockOperations,
     startError,
+    audioRecoveryNeeded,
+    recoverAudio,
     cycleMinutes,
     cycleSeconds,
     practiceCycleSeconds,
@@ -84,7 +86,9 @@ export function TimerScreen() {
     setIntervalInput(intervalSec.toString());
   }, [intervalSec]);
 
-  const countdownInputValid = /^(?:[1-9]|[1-5][0-9]|60)$/.test(initialCountdownInput);
+  const validCountdownInput = (value: string) =>
+    /^[1-9][0-9]*$/.test(value) && isValidInitialCountdown(Number(value));
+  const countdownInputValid = validCountdownInput(initialCountdownInput);
   const integerInputValid = (value: string, min: number, max: number, optional = false) =>
     (optional && value === '') || (/^\d+$/.test(value) && Number(value) >= min && Number(value) <= max);
   const settingsInputsValid =
@@ -527,20 +531,20 @@ export function TimerScreen() {
                 type="number"
                 inputMode="numeric"
                 min={1}
-                max={60}
+                max={MAX_INITIAL_COUNTDOWN_SECONDS}
                 step={1}
                 value={initialCountdownInput}
                 onChange={(event) => {
                   const value = event.target.value;
                   setInitialCountdownInput(value);
-                  if (/^(?:[1-9]|[1-5][0-9]|60)$/.test(value)) changeInitialCountdown(Number(value));
+                  if (validCountdownInput(value)) changeInitialCountdown(Number(value));
                 }}
                 aria-invalid={!countdownInputValid}
                 aria-describedby={!countdownInputValid ? 'initial-countdown-error' : undefined}
                 className="mt-2 w-24 h-12 bg-transparent text-center text-3xl font-black tabular-nums border-b-4 border-primary focus:outline-none focus:border-accent"
                 data-testid="input-initial-countdown"
               />
-              {!countdownInputValid && <p id="initial-countdown-error" className="mt-2 text-sm font-bold text-destructive normal-case">1～60の整数を入力してください</p>}
+              {!countdownInputValid && <p id="initial-countdown-error" className="mt-2 text-sm font-bold text-destructive normal-case">1～{MAX_INITIAL_COUNTDOWN_SECONDS}の整数を入力してください</p>}
               {startError && <p role="alert" className="mt-2 text-sm font-bold text-destructive normal-case" data-testid="text-start-error">{startError}</p>}
             </section>
 
@@ -1001,6 +1005,19 @@ export function TimerScreen() {
           state === 'IDLE' ? '' : 'timer-compact-controls'
         }`}
       >
+        {audioRecoveryNeeded && (state === 'COUNTDOWN' || state === 'RUNNING') && !waitingForCompletion && (
+          <div className="mb-2 flex flex-wrap items-center justify-center gap-2 text-sm">
+            <span role="alert" className="text-destructive">音声が停止しました。</span>
+            <button
+              type="button"
+              onClick={() => void recoverAudio()}
+              className="rounded-lg bg-primary px-3 py-2 font-bold text-primary-foreground"
+              data-testid="button-recover-audio"
+            >
+              音声を再開
+            </button>
+          </div>
+        )}
         <div className="max-w-2xl mx-auto flex justify-center gap-3 sm:gap-8">
           {state === 'IDLE' && (
             <button

@@ -1,4 +1,5 @@
 let audioCtx: AudioContext | null = null;
+let restoreAudioSession: (() => void) | null = null;
 
 export type ScheduledTone = {
   cancel: () => void;
@@ -19,20 +20,52 @@ function createAudioContext() {
   return new AudioContextClass();
 }
 
+function enableBackgroundPlayback() {
+  if (restoreAudioSession) return;
+  const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+  if (!session) return;
+
+  try {
+    const previousType = session.type;
+    session.type = 'playback';
+    restoreAudioSession = () => {
+      try {
+        if (session.type === 'playback') session.type = previousType;
+      } catch {
+        // Audio session settings are optional; leave playback to the browser.
+      }
+    };
+  } catch {
+    // The browser can still play Web Audio without the audio session API.
+  }
+}
+
 export async function ensureAudioRunning() {
-  if (!audioCtx) {
+  enableBackgroundPlayback();
+  if (!audioCtx || audioCtx.state === 'closed') {
     audioCtx = createAudioContext();
   }
 
-  if (audioCtx.state !== 'running') {
-    await audioCtx.resume();
+  const context = audioCtx;
+  if (context.state !== 'running') {
+    let timeout: number | undefined;
+    try {
+      await Promise.race([
+        context.resume(),
+        new Promise<never>((_, reject) => {
+          timeout = window.setTimeout(() => reject(new Error('Audio resume timed out.')), 1500);
+        }),
+      ]);
+    } finally {
+      window.clearTimeout(timeout);
+    }
   }
 
-  if (audioCtx.state !== 'running') {
+  if (context !== audioCtx || context.state !== 'running') {
     throw new Error('AudioContext did not enter the running state.');
   }
 
-  return audioCtx;
+  return context;
 }
 
 export function getAudioContext() {
@@ -99,6 +132,17 @@ export function scheduleToneAt(
 
 export function cancelScheduledTones() {
   [...scheduledTones].forEach((tone) => tone.cancel());
+}
+
+export function closeAudioContext() {
+  cancelScheduledTones();
+  const context = audioCtx;
+  audioCtx = null;
+  restoreAudioSession?.();
+  restoreAudioSession = null;
+  if (context && context.state !== 'closed') {
+    void context.close().catch(() => {});
+  }
 }
 
 export function schedulePreviewToneAt(atTime: number) {
