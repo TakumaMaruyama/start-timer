@@ -1,5 +1,7 @@
 let audioCtx: AudioContext | null = null;
 let restoreAudioSession: (() => void) | null = null;
+let sessionGeneration = 0;
+let sessionRepairPending = false;
 
 export type ScheduledTone = {
   cancel: () => void;
@@ -30,7 +32,7 @@ function enableBackgroundPlayback() {
     session.type = 'playback';
     restoreAudioSession = () => {
       try {
-        if (session.type === 'playback') session.type = previousType;
+        if (session.type === 'playback' || sessionRepairPending) session.type = previousType;
       } catch {
         // Audio session settings are optional; leave playback to the browser.
       }
@@ -40,25 +42,37 @@ function enableBackgroundPlayback() {
   }
 }
 
-export async function ensureAudioRunning() {
+async function withAudioTimeout(operation: Promise<void>) {
+  let timeout: number | undefined;
+  try {
+    await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeout = window.setTimeout(() => reject(new Error('Audio operation timed out.')), 1500);
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+export async function ensureAudioRunning(fromUserGesture = false, resetClock = false) {
   enableBackgroundPlayback();
   if (!audioCtx || audioCtx.state === 'closed') {
     audioCtx = createAudioContext();
   }
 
   const context = audioCtx;
-  if (context.state !== 'running') {
-    let timeout: number | undefined;
-    try {
-      await Promise.race([
-        context.resume(),
-        new Promise<never>((_, reject) => {
-          timeout = window.setTimeout(() => reject(new Error('Audio resume timed out.')), 1500);
-        }),
-      ]);
-    } finally {
-      window.clearTimeout(timeout);
-    }
+  if (fromUserGesture) {
+    const source = context.createBufferSource();
+    source.buffer = context.createBuffer(1, 1, context.sampleRate);
+    source.connect(context.destination);
+    source.addEventListener('ended', () => source.disconnect(), { once: true });
+    source.start();
+  }
+  if (resetClock) await withAudioTimeout(context.suspend());
+  if (fromUserGesture || context.state !== 'running') {
+    await withAudioTimeout(context.resume());
   }
 
   if (context !== audioCtx || context.state !== 'running') {
@@ -135,13 +149,37 @@ export function cancelScheduledTones() {
 }
 
 export function closeAudioContext() {
-  cancelScheduledTones();
+  releaseAudioPlayback();
   const context = audioCtx;
   audioCtx = null;
-  restoreAudioSession?.();
-  restoreAudioSession = null;
   if (context && context.state !== 'closed') {
     void context.close().catch(() => {});
+  }
+}
+
+export function releaseAudioPlayback() {
+  cancelScheduledTones();
+  sessionGeneration += 1;
+  restoreAudioSession?.();
+  restoreAudioSession = null;
+  sessionRepairPending = false;
+}
+
+export function repairAudioSession() {
+  const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+  if (!session) return;
+  const generation = sessionGeneration;
+  try {
+    session.type = 'ambient';
+    sessionRepairPending = true;
+    window.setTimeout(() => {
+      if (generation === sessionGeneration && restoreAudioSession) {
+        try { session.type = 'playback'; } catch { /* Playback can still use the browser default. */ }
+        sessionRepairPending = false;
+      }
+    }, 0);
+  } catch {
+    // Re-priming Web Audio still works when the audio session API is unavailable.
   }
 }
 

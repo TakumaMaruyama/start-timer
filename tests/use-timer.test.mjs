@@ -21,14 +21,17 @@ class FakeAudioContext {
   static current;
   static resumeMode = 'immediate';
   static pending = [];
+  static created = 0;
   state = 'suspended';
   destination = {};
   clockLag = 0;
   clockStoppedAt = null;
 
-  constructor() { FakeAudioContext.current = this; }
+  resumeCalls = 0;
+  constructor() { FakeAudioContext.current = this; FakeAudioContext.created += 1; }
   get currentTime() { return (this.clockStoppedAt ?? now) / 1000 - this.clockLag; }
   resume() {
+    this.resumeCalls += 1;
     if (this.state === 'closed') return Promise.reject(new Error('audio context closed'));
     if (FakeAudioContext.resumeMode === 'fail') return Promise.reject(new Error('audio failed'));
     if (FakeAudioContext.resumeMode === 'deferred') {
@@ -44,6 +47,14 @@ class FakeAudioContext {
     this.state = 'closed';
     return Promise.resolve();
   }
+  suspend() {
+    if (this.clockStoppedAt !== null) this.clockLag += (now - this.clockStoppedAt) / 1000;
+    this.clockStoppedAt = null;
+    this.state = 'suspended';
+    return Promise.resolve();
+  }
+  addEventListener() {}
+  removeEventListener() {}
   createOscillator() {
     const oscillator = {
       frequency: { setValueAtTime(value) { oscillator.frequencyValue = value; } },
@@ -61,6 +72,10 @@ class FakeAudioContext {
       gain: { setValueAtTime() {}, linearRampToValueAtTime() {} },
       connect() {}, disconnect() {},
     };
+  }
+  createBuffer() { return {}; }
+  createBufferSource() {
+    return { connect() {}, disconnect() {}, start() {}, addEventListener() {} };
   }
 }
 
@@ -231,7 +246,7 @@ test('押下時の音声有効化が保留されたままでも指を離す操�
   assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 11).length, 1);
 });
 
-test('設定に戻って再スタートすると閉じた音声コンテキストを再利用しない', async () => {
+test('設定に戻って再スタートしても有効化済みの音声コンテキストを維持する', async () => {
   await mount();
   await act(async () => {
     timer.changeInitialCountdown(1);
@@ -240,12 +255,115 @@ test('設定に戻って再スタートすると閉じた音声コンテキス�
   const oldContext = FakeAudioContext.current;
   await tick(1000);
   await act(async () => { timer.lockOperations(false); timer.reset(); });
-  assert.equal(oldContext.state, 'closed');
+  assert.equal(oldContext.state, 'running');
   assert.ok(played.every((tone) => tone.cancelled));
   await act(async () => { await timer.start(now); });
-  assert.notEqual(FakeAudioContext.current, oldContext);
+  assert.equal(FakeAudioContext.current, oldContext);
   assert.equal(timer.state, 'COUNTDOWN');
   assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 3 && !tone.cancelled).length, 1);
+});
+
+test('pointerdownがrunningを返してもタッチを離した操作で音声を再有効化する', async () => {
+  await mount();
+  await act(async () => { await timer.start(now, 4); });
+  const context = FakeAudioContext.current;
+  const calls = context.resumeCalls;
+  await act(async () => window.dispatchEvent(pointer('pointerup', 4)));
+  assert.ok(context.resumeCalls > calls);
+  assert.equal(timer.state, 'COUNTDOWN');
+  assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 11 && !tone.cancelled).length, 1);
+});
+
+test('完了と一時停止の後も有効化済みのコンテキストで繰り返し再開する', async () => {
+  await mount();
+  await act(async () => {
+    timer.changeInitialCountdown(1);
+    timer.changeCycleSeconds(2);
+    timer.changeTotalStrokes(1);
+  });
+  await act(async () => { await timer.start(now); });
+  const context = FakeAudioContext.current;
+  await tick(1000);
+  await act(async () => { timer.lockOperations(false); timer.pause(); });
+  assert.equal(timer.state, 'PAUSED');
+  assert.equal(context.state, 'running');
+  await act(async () => { await timer.resume(); });
+  assert.equal(FakeAudioContext.current, context);
+  await tick(2000);
+  assert.equal(timer.state, 'COMPLETE');
+  assert.equal(context.state, 'running');
+  await act(async () => { timer.lockOperations(false); timer.reset(); });
+  await act(async () => { await timer.start(now); });
+  assert.equal(FakeAudioContext.current, context);
+  assert.equal(timer.state, 'COUNTDOWN');
+});
+
+test('BFCacheへの画面遷移では予定音を取り消し、復帰時に今後の合図だけ予約する', async () => {
+  await mount();
+  await act(async () => { await timer.start(now); });
+  await act(async () => window.dispatchEvent(new window.PageTransitionEvent('pagehide', { persisted: true })));
+  assert.ok(played.every((tone) => tone.cancelled));
+  now = 17000;
+  await act(async () => window.dispatchEvent(new window.PageTransitionEvent('pageshow', { persisted: true })));
+  assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 11 && !tone.cancelled).length, 0);
+  assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 21 && !tone.cancelled).length, 1);
+});
+
+test('pagehide後に保留していた開始処理が終わっても復帰まで音を予約しない', async () => {
+  await mount();
+  FakeAudioContext.current.state = 'suspended';
+  FakeAudioContext.resumeMode = 'deferred';
+  await act(async () => { void timer.start(now, 4); });
+  await act(async () => window.dispatchEvent(new window.PageTransitionEvent('pagehide', { persisted: true })));
+  await resolveAudio();
+  await act(async () => {
+    window.dispatchEvent(pointer('pointerup', 4));
+    window.dispatchEvent(new window.Event('focus'));
+  });
+  assert.equal(played.filter((tone) => !tone.cancelled).length, 0);
+  await act(async () => window.dispatchEvent(new window.PageTransitionEvent('pageshow', { persisted: true })));
+  assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 11 && !tone.cancelled).length, 1);
+});
+
+test('pagehide後に保留していた音声回復が終わっても、遅い復帰で過去音を予約しない', async () => {
+  await mount();
+  await act(async () => { await timer.start(now); });
+  await tick(10000);
+  FakeAudioContext.current.state = 'suspended';
+  FakeAudioContext.resumeMode = 'deferred';
+  await act(async () => window.dispatchEvent(new window.Event('focus')));
+  await act(async () => window.dispatchEvent(new window.PageTransitionEvent('pagehide', { persisted: true })));
+  await resolveAudio();
+  assert.ok(played.every((tone) => tone.cancelled));
+  now = 31500;
+  await act(async () => window.dispatchEvent(new window.PageTransitionEvent('pageshow', { persisted: true })));
+  assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at < 41 && !tone.cancelled).length, 0);
+  assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 41 && !tone.cancelled).length, 1);
+});
+
+test('1秒サイクルでも長いバックグラウンドのタイマー間隔を越えて予告音を予約する', async (t) => {
+  let refreshAudio;
+  const setInterval = window.setInterval;
+  window.setInterval = (callback, delay) => {
+    if (delay === 1000) refreshAudio = callback;
+    return 1;
+  };
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+  t.after(() => {
+    window.setInterval = setInterval;
+    delete document.visibilityState;
+  });
+  await mount();
+  await act(async () => {
+    timer.changeInitialCountdown(1);
+    timer.changeCycleSeconds(1);
+    timer.changeCourseSwimmers(1);
+  });
+  await act(async () => { await timer.start(now); });
+  assert.ok(played.some((tone) => tone.frequency === 1800 && tone.at > 66));
+  now += 60000;
+  await act(async () => refreshAudio());
+  assert.ok(played.some((tone) => tone.frequency === 1800 && tone.at > 126));
 });
 
 test('音声が自動でrunningに戻った場合も時計のずれを修正し、次の合図を一度だけ予約する', async () => {
@@ -266,7 +384,7 @@ test('音声が自動でrunningに戻った場合も時計のずれを修正し�
   assert.ok(played.some((tone) => tone.frequency === 1800 && tone.at === 12 && tone.cancelled));
 });
 
-test('running表示のまま音声時計が停止した場合は新しい音声コンテキストを作る', async () => {
+test('running表示のまま音声時計が停止した場合は停止と再開で音声時計を動かす', async () => {
   await mount();
   await act(async () => { await timer.start(now); });
   const stalledContext = FakeAudioContext.current;
@@ -274,9 +392,10 @@ test('running表示のまま音声時計が停止した場合は新しい音声�
   now += 4000;
   await act(async () => window.dispatchEvent(new window.Event('focus')));
 
-  assert.equal(stalledContext.state, 'closed');
-  assert.notEqual(FakeAudioContext.current, stalledContext);
-  assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 11 && !tone.cancelled).length, 1);
+  assert.equal(stalledContext.state, 'running');
+  assert.equal(FakeAudioContext.current, stalledContext);
+  assert.equal(stalledContext.clockStoppedAt, null);
+  assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 7 && !tone.cancelled).length, 1);
 });
 
 test('バックグラウンドで描画が止まっても初回予約の先を補充し、停止で音声設定を戻す', async (t) => {
@@ -302,7 +421,7 @@ test('バックグラウンドで描画が止まっても初回予約の先を�
     await timer.start(now);
   });
   assert.equal(audioSession.type, 'playback');
-  assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 67).length, 0);
+  assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 67).length, 1);
 
   now = 61000;
   await act(async () => {
@@ -389,7 +508,7 @@ test('復帰時に自動で音が戻らない場合、画面の音声再開ボ�
 
   FakeAudioContext.resumeMode = 'immediate';
   await act(async () => recoverButton.click());
-  assert.notEqual(FakeAudioContext.current, oldContext);
+  assert.equal(FakeAudioContext.current, oldContext);
   assert.equal(container.querySelector('[data-testid="button-recover-audio"]'), null);
   assert.equal(played.filter((tone) => tone.frequency === 1800 && tone.at === 21 && !tone.cancelled).length, 1);
 });
@@ -408,6 +527,53 @@ test('操作ロック中はpauseとresetを処理側で拒否し、再開時に�
   await act(async () => { void timer.resume(); });
   assert.equal(timer.state, 'RUNNING');
   assert.equal(timer.operationLocked, true);
+});
+
+test('一時停止から音声再開に失敗した場合は理由を表示し、次のタップで再試行する', async () => {
+  await mountScreen();
+  await act(async () => container.querySelector('[data-testid="button-start"]').click());
+  await tick(10000);
+  const unlock = container.querySelector('[data-testid="button-unlock"]');
+  await act(async () => unlock.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' })));
+  now += 2000;
+  await act(async () => unlock.dispatchEvent(new window.KeyboardEvent('keyup', { bubbles: true, key: 'Enter' })));
+  assert.ok(container.querySelector('[data-testid="button-recover-audio"]'));
+  await act(async () => container.querySelector('[data-testid="button-pause"]').click());
+  FakeAudioContext.resumeMode = 'fail';
+  await act(async () => container.querySelector('[data-testid="button-resume"]').click());
+  assert.match(container.textContent, /音声を再開できませんでした/);
+  assert.ok(container.querySelector('[data-testid="button-resume"]'));
+  FakeAudioContext.resumeMode = 'immediate';
+  await act(async () => container.querySelector('[data-testid="button-resume"]').click());
+  assert.ok(container.querySelector('[data-testid="button-unlock"]'));
+  assert.doesNotMatch(container.textContent, /音声を再開できませんでした/);
+});
+
+test('手動再準備のAudioSession修復が保留中に停止してもplaybackへ戻さない', async (t) => {
+  const callbacks = [];
+  const setTimeout = window.setTimeout;
+  window.setTimeout = (callback, delay) => {
+    if (delay === 0) {
+      callbacks.push(callback);
+      return undefined;
+    }
+    return setTimeout(callback, delay);
+  };
+  const audioSession = { type: 'auto' };
+  Object.defineProperty(navigator, 'audioSession', { configurable: true, value: audioSession });
+  t.after(() => {
+    window.setTimeout = setTimeout;
+    delete navigator.audioSession;
+  });
+  await mount();
+  await act(async () => { await timer.start(now); });
+  assert.equal(audioSession.type, 'playback');
+  await act(async () => { await timer.recoverAudio(); });
+  assert.equal(audioSession.type, 'ambient');
+  await act(async () => { timer.lockOperations(false); timer.reset(); });
+  await act(async () => callbacks.forEach((callback) => callback()));
+  assert.equal(audioSession.type, 'auto');
+  assert.ok(played.every((tone) => tone.cancelled));
 });
 
 test('1・2・3・10・60・300秒の初回合図と予告音を押下時刻から予約する', async () => {

@@ -4,6 +4,8 @@ import {
   closeAudioContext,
   ensureAudioRunning,
   getAudioContext,
+  releaseAudioPlayback,
+  repairAudioSession,
   schedulePreviewToneAt,
   scheduleStartToneAt,
   type ScheduledTone,
@@ -30,7 +32,7 @@ const PREVIEW_STEPS = [
   { offsetMs: 1000 },
 ] as const;
 const NEXT_START_EPSILON_MS = 0.01;
-const UNLIMITED_SCHEDULE_BATCH_SIZE = 12;
+const AUDIO_SCHEDULE_AHEAD_MS = 130_000;
 const AUDIO_SCHEDULE_LEAD_MS = 25;
 const AUDIO_CLOCK_DRIFT_MS = 250;
 const AUDIO_REFRESH_MS = 1000;
@@ -99,6 +101,7 @@ export function useTimer(initialInterval = 10) {
   const startPendingRef = useRef(false);
   const resumePendingRef = useRef(false);
   const resyncPendingRef = useRef(false);
+  const pageHiddenRef = useRef(false);
   const audioRecoveryNeededRef = useRef(false);
   const audioClockRef = useRef<{ performanceMs: number; audioSeconds: number } | null>(null);
   const scheduledThroughRef = useRef(0);
@@ -119,7 +122,7 @@ export function useTimer(initialInterval = 10) {
   }, []);
 
   const invalidateAudioSchedule = useCallback((releaseContext = false) => {
-    if (releaseContext) closeAudioContext();
+    if (releaseContext) releaseAudioPlayback();
     else cancelScheduledTones();
     audioClockRef.current = null;
     scheduledThroughRef.current = 0;
@@ -308,13 +311,12 @@ export function useTimer(initialInterval = 10) {
       let target = nextAllowedStartAt(
         fromStartAtPerformanceMs,
       );
-      let scheduledCount = 0;
+      const scheduleThrough = Math.max(performance.now(), fromStartAtPerformanceMs) + AUDIO_SCHEDULE_AHEAD_MS;
       while (
         target !== null &&
-        scheduledCount < UNLIMITED_SCHEDULE_BATCH_SIZE
+        target <= scheduleThrough
       ) {
         if (!scheduleCycleAudio(target)) break;
-        scheduledCount += 1;
         target = nextAllowedStartAt(target + NEXT_START_EPSILON_MS);
       }
       scheduledThroughRef.current =
@@ -394,17 +396,23 @@ export function useTimer(initialInterval = 10) {
     setCountdown(0);
   }, []);
 
-  const recoverAudio = useCallback(async (replaceContext = true) => {
+  const recoverAudio = useCallback(async (fromUserGesture = true, resetClock = false) => {
+    if (pageHiddenRef.current) return;
     const currentState = stateRef.current;
     if (currentState !== 'RUNNING' && currentState !== 'COUNTDOWN') return;
-    if (startPendingRef.current || resyncPendingRef.current || waitingForCompletionRef.current) return;
+    if (startPendingRef.current || waitingForCompletionRef.current) return;
+    if (resyncPendingRef.current) {
+      if (!fromUserGesture) return;
+      commandGenerationRef.current += 1;
+    }
 
     resyncPendingRef.current = true;
     const generation = commandGenerationRef.current;
-    invalidateAudioSchedule(replaceContext);
+    invalidateAudioSchedule();
+    if (fromUserGesture) repairAudioSession();
 
     try {
-      const context = await ensureAudioRunning();
+      const context = await ensureAudioRunning(fromUserGesture, resetClock);
       if (generation !== commandGenerationRef.current) return;
 
       const now = performance.now();
@@ -442,17 +450,20 @@ export function useTimer(initialInterval = 10) {
     scheduleUpcomingAudio,
   ]);
 
-  const maintainAudio = useCallback(() => {
+  const maintainAudio = useCallback((retryAudio = false) => {
     if (
       (stateRef.current !== 'COUNTDOWN' && stateRef.current !== 'RUNNING') ||
-      startPendingRef.current || resyncPendingRef.current || waitingForCompletionRef.current
+      pageHiddenRef.current || startPendingRef.current || resyncPendingRef.current || waitingForCompletionRef.current
     ) return;
 
     const now = performance.now();
     const context = getAudioContext();
     if (context?.state !== 'running') {
       if (audioClockRef.current) invalidateAudioSchedule();
-      if (!audioRecoveryNeededRef.current && document.visibilityState === 'visible') {
+      if (
+        (retryAudio || !audioRecoveryNeededRef.current) &&
+        document.visibilityState === 'visible'
+      ) {
         void recoverAudio(false);
       }
       return;
@@ -473,7 +484,7 @@ export function useTimer(initialInterval = 10) {
         invalidateAudioSchedule();
         audioClockRef.current = clock;
       } else {
-        void recoverAudio(clockStalled);
+        void recoverAudio(false, clockStalled);
       }
       return;
     }
@@ -481,6 +492,7 @@ export function useTimer(initialInterval = 10) {
     for (const scheduledStart of scheduledStartTimesRef.current) {
       if (now - scheduledStart > AUDIO_CLOCK_DRIFT_MS) scheduledStartTimesRef.current.delete(scheduledStart);
     }
+    audioClockRef.current = { performanceMs: now, audioSeconds };
 
     const firstUnscheduled = scheduledThroughRef.current;
     if (
@@ -492,31 +504,52 @@ export function useTimer(initialInterval = 10) {
   }, [invalidateAudioSchedule, recoverAudio, scheduleUpcomingAudio]);
 
   useEffect(() => {
-    if (state !== 'RUNNING' && state !== 'COUNTDOWN') return;
-
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') void requestWakeLock();
-      maintainAudio();
+      maintainAudio(true);
+    };
+    const handleActivity = () => maintainAudio(true);
+    const handlePageShow = () => {
+      pageHiddenRef.current = false;
+      if (stateRef.current === 'RUNNING' || stateRef.current === 'COUNTDOWN') void requestWakeLock();
+      maintainAudio(true);
+    };
+    const handlePageHide = () => {
+      pageHiddenRef.current = true;
+      commandGenerationRef.current += 1;
+      releaseAudioCleanupRef.current?.();
+      startPendingRef.current = false;
+      resumePendingRef.current = false;
+      resyncPendingRef.current = false;
+      invalidateAudioSchedule(true);
+      void releaseWakeLock();
     };
 
     document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('pageshow', maintainAudio);
-    window.addEventListener('focus', maintainAudio);
+    window.addEventListener('pageshow', handlePageShow);
+    window.addEventListener('focus', handleActivity);
+    window.addEventListener('pagehide', handlePageHide);
+    const context = getAudioContext();
+    context?.addEventListener('statechange', handleActivity);
     // requestAnimationFrame stops when hidden, but audio may still be playing.
-    const refresh = window.setInterval(maintainAudio, AUDIO_REFRESH_MS);
+    const refresh = state === 'RUNNING' || state === 'COUNTDOWN'
+      ? window.setInterval(maintainAudio, AUDIO_REFRESH_MS)
+      : undefined;
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('pageshow', maintainAudio);
-      window.removeEventListener('focus', maintainAudio);
+      window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('focus', handleActivity);
+      window.removeEventListener('pagehide', handlePageHide);
+      context?.removeEventListener('statechange', handleActivity);
       window.clearInterval(refresh);
     };
-  }, [maintainAudio, requestWakeLock, state]);
+  }, [invalidateAudioSchedule, maintainAudio, releaseWakeLock, requestWakeLock, state]);
 
   const loop = useCallback(() => {
     const now = performance.now();
     const currentState = stateRef.current;
 
-    if (currentState === 'COMPLETE') {
+    if (currentState === 'COMPLETE' || pageHiddenRef.current) {
       rafId.current = requestAnimationFrame(loop);
       return;
     }
@@ -628,7 +661,8 @@ export function useTimer(initialInterval = 10) {
       if (startFlashTimerRef.current !== null) {
         window.clearTimeout(startFlashTimerRef.current);
       }
-      invalidateAudioSchedule(true);
+      invalidateAudioSchedule();
+      closeAudioContext();
       void releaseWakeLock();
     };
   }, [invalidateAudioSchedule, loop, releaseWakeLock]);
@@ -636,6 +670,7 @@ export function useTimer(initialInterval = 10) {
   const start = useCallback(async (pressedAt = performance.now(), pointerId?: number) => {
     if (
       stateRef.current !== 'IDLE' ||
+      pageHiddenRef.current ||
       startPendingRef.current ||
       !isValidInitialCountdown(initialCountdownRef.current) ||
       ((totalStrokesRef.current !== null ||
@@ -691,7 +726,7 @@ export function useTimer(initialInterval = 10) {
         const onUp = (event: PointerEvent) => {
           if (event.pointerId !== pointerId) return;
           cleanup();
-          resolve(ensureAudioRunning());
+          resolve(ensureAudioRunning(true));
         };
         const onCancel = (event: PointerEvent) => {
           if (event.pointerId !== pointerId) return;
@@ -708,7 +743,7 @@ export function useTimer(initialInterval = 10) {
     }
 
     try {
-      const pressAudio = ensureAudioRunning();
+      const pressAudio = ensureAudioRunning(true);
       const context = await (releaseAudio ? Promise.any([pressAudio, releaseAudio]) : pressAudio);
       if (generation !== commandGenerationRef.current) return;
       audioClockRef.current = {
@@ -722,7 +757,6 @@ export function useTimer(initialInterval = 10) {
       return;
     }
 
-    releaseAudioCleanupRef.current?.();
     if (!scheduleInitialAudio(countdownStart, AUDIO_SCHEDULE_LEAD_MS)) {
       abortStart('最初の合図に音声が間に合わなかったため、開始を中止しました。');
       return;
@@ -768,12 +802,12 @@ export function useTimer(initialInterval = 10) {
   }, [invalidateAudioSchedule, releaseWakeLock, updatePracticeCycleProgress]);
 
   const resume = useCallback(async () => {
-    if (stateRef.current !== 'PAUSED' || operationLockedRef.current || resumePendingRef.current) return;
+    if (stateRef.current !== 'PAUSED' || pageHiddenRef.current || operationLockedRef.current || resumePendingRef.current) return;
     resumePendingRef.current = true;
     const generation = commandGenerationRef.current + 1;
     commandGenerationRef.current = generation;
     try {
-      const context = await ensureAudioRunning();
+      const context = await ensureAudioRunning(true);
       if (generation !== commandGenerationRef.current) return;
       audioClockRef.current = {
         performanceMs: performance.now(),
@@ -783,6 +817,7 @@ export function useTimer(initialInterval = 10) {
     } catch {
       if (generation === commandGenerationRef.current) {
         resumePendingRef.current = false;
+        reportAudioRecoveryNeeded(true);
       }
       return;
     }

@@ -172,3 +172,21 @@ test('keeps the existing unlimited absolute interval schedule', () => {
     31_000,
   );
 });
+
+test('preserves fractional start boundaries after pause and resume', () => {
+  for (const courseSwimmers of [null, 5]) {
+    const first = 5750.650000000001;
+    const schedule = {
+      ...cappedSchedule,
+      firstStartAtPerformanceMs: first,
+      intervalMs: 5000,
+      courseSwimmers,
+    };
+    const boundary = first + 5000;
+    assert.equal(nextStartToneAtOrAfter(boundary, schedule), boundary);
+    assert.equal(nextStartToneAtOrAfter(boundary + 0.01, schedule), first + 10000);
+    const cycleBoundary = first + 60000;
+    assert.equal(nextStartToneAtOrAfter(cycleBoundary, schedule), cycleBoundary);
+    assert.equal(nextStartToneAtOrAfter(cycleBoundary + 0.01, schedule), cycleBoundary + 5000);
+  }
+});

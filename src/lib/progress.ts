@@ -156,11 +156,13 @@ export function nextStartToneAtOrAfter(
     fromPerformanceMs,
     firstStartAtPerformanceMs,
   );
+  const boundaryToleranceMs = Number.EPSILON *
+    Math.max(1, Math.abs(effectiveFrom), Math.abs(firstStartAtPerformanceMs)) * 4;
   let nextStartAt: number;
 
   if (courseSwimmers === null) {
     const intervalIndex = Math.ceil(
-      (effectiveFrom - firstStartAtPerformanceMs) / intervalMs,
+      (effectiveFrom - firstStartAtPerformanceMs - boundaryToleranceMs) / intervalMs,
     );
     nextStartAt =
       firstStartAtPerformanceMs + intervalIndex * intervalMs;
@@ -175,13 +177,13 @@ export function nextStartToneAtOrAfter(
     }
 
     const cycleIndex = Math.floor(
-      (effectiveFrom - firstStartAtPerformanceMs) /
+      (effectiveFrom - firstStartAtPerformanceMs + boundaryToleranceMs) /
         practiceCycleDurationMs,
     );
     const cycleStartAt =
       firstStartAtPerformanceMs + cycleIndex * practiceCycleDurationMs;
     const intervalIndex = Math.ceil(
-      (effectiveFrom - cycleStartAt) / intervalMs,
+      (effectiveFrom - cycleStartAt - boundaryToleranceMs) / intervalMs,
     );
     const offsetWithinCycle = intervalIndex * intervalMs;
 

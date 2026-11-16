@@ -1005,17 +1005,17 @@ export function TimerScreen() {
           state === 'IDLE' ? '' : 'timer-compact-controls'
         }`}
       >
-        {audioRecoveryNeeded && (state === 'COUNTDOWN' || state === 'RUNNING') && !waitingForCompletion && (
+        {(audioRecoveryNeeded || !operationLocked) && (state === 'COUNTDOWN' || state === 'RUNNING' || state === 'PAUSED') && !waitingForCompletion && (
           <div className="mb-2 flex flex-wrap items-center justify-center gap-2 text-sm">
-            <span role="alert" className="text-destructive">音声が停止しました。</span>
-            <button
+            {audioRecoveryNeeded && <span role="alert" className="text-destructive">音声を再開できませんでした。もう一度操作してください。</span>}
+            {state !== 'PAUSED' && <button
               type="button"
               onClick={() => void recoverAudio()}
               className="rounded-lg bg-primary px-3 py-2 font-bold text-primary-foreground"
               data-testid="button-recover-audio"
             >
-              音声を再開
-            </button>
+              {audioRecoveryNeeded ? '音声を再開' : '音声を再準備'}
+            </button>}
           </div>
         )}
         <div className="max-w-2xl mx-auto flex justify-center gap-3 sm:gap-8">
